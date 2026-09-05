@@ -1,0 +1,43 @@
+[project]
+name = "nexus-learning"
+version = "0.1.0"
+description = "Evidence-bounded learning and adaptation for Nexus"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "Apache-2.0"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15",
+    "pyright>=1.1.370",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nexus_learning*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F", "I", "E"]
+ignore = ["E501"]
+fixable = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nexus_learning"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.pyright]
+include = ["nexus_learning"]
+typeCheckingMode = "basic"
