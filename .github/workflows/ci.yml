@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.11
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Run Pytest (including Authority Boundary Gate)
+        run: uv run pytest -q
+      - name: Run Ruff
+        run: uv run ruff check nexus_learning tests
+      - name: Run Pyright
+        run: uv run pyright nexus_learning
+      - name: Build Wheel and SDist
+        run: uv build
+      - name: Clean Environment Wheel Install Smoke
+        run: |
+          python -m venv .smoke_venv
+          .smoke_venv/bin/pip install dist/nexus_learning-*.whl
+          .smoke_venv/bin/python -c "import nexus_learning; print('IMPORT_OK')"
