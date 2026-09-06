@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 LEARNING_EXPERIENCE_SCHEMA_VERSION = "nexus_learning_experience.v1"
 RUNTIME_LEARNING_CLOSURE_SCHEMA = "nexus.runtime_learning_closure.v1"
@@ -344,11 +344,14 @@ def validate_nexus_learning_episode(episode: dict[str, Any]) -> None:
         raise ValueError("NEXUS_LEARNING_EPISODE_QUALIFICATION_WITHOUT_EVIDENCE")
 
 
-def paired_memory_uplift_observed(evidence: dict[str, Any]) -> bool:
+def paired_memory_uplift_observed(evidence: Mapping[str, Any]) -> bool:
     """Require a true memory_off/on paired verifier before claiming uplift."""
-    pair = evidence.get("paired_verifier") if isinstance(evidence.get("paired_verifier"), dict) else evidence
-    off = pair.get("memory_off") if isinstance(pair.get("memory_off"), dict) else {}
-    on = pair.get("memory_on") if isinstance(pair.get("memory_on"), dict) else {}
+    paired = evidence.get("paired_verifier")
+    pair: Mapping[str, Any] = paired if isinstance(paired, Mapping) else evidence
+    off_val = pair.get("memory_off")
+    off: Mapping[str, Any] = off_val if isinstance(off_val, Mapping) else {}
+    on_val = pair.get("memory_on")
+    on: Mapping[str, Any] = on_val if isinstance(on_val, Mapping) else {}
     fingerprint = str(pair.get("task_fingerprint") or pair.get("task_id") or "")
     off_fp = str(off.get("task_fingerprint") or off.get("task_id") or fingerprint)
     on_fp = str(on.get("task_fingerprint") or on.get("task_id") or fingerprint)

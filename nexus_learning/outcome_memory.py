@@ -362,9 +362,12 @@ def _load_idempotency_keys(storage_path: Path) -> set[str]:
 
 
 def _has_paired_uplift_evidence(evidence: Mapping[str, Any]) -> bool:
-    pair = evidence.get("paired_verifier") if isinstance(evidence.get("paired_verifier"), Mapping) else evidence
-    off = pair.get("memory_off") if isinstance(pair.get("memory_off"), Mapping) else {}
-    on = pair.get("memory_on") if isinstance(pair.get("memory_on"), Mapping) else {}
+    paired = evidence.get("paired_verifier")
+    pair: Mapping[str, Any] = paired if isinstance(paired, Mapping) else evidence
+    off_val = pair.get("memory_off")
+    off: Mapping[str, Any] = off_val if isinstance(off_val, Mapping) else {}
+    on_val = pair.get("memory_on")
+    on: Mapping[str, Any] = on_val if isinstance(on_val, Mapping) else {}
     fingerprint = str(pair.get("task_fingerprint") or pair.get("task_id") or "")
     if not fingerprint or str(off.get("task_fingerprint") or off.get("task_id") or fingerprint) != fingerprint or str(on.get("task_fingerprint") or on.get("task_id") or fingerprint) != fingerprint:
         return False
@@ -408,7 +411,8 @@ def build_episode_from_receipts(
     receipt_dicts: list[dict[str, Any]] = []
     for r in (receipts or []):
         if hasattr(r, "to_dict") and callable(r.to_dict):
-            receipt_dicts.append(r.to_dict())
+            d = r.to_dict()
+            receipt_dicts.append(dict(d) if isinstance(d, Mapping) else {"data": str(d)})
         elif hasattr(r, "__dataclass_fields__"):
             import dataclasses
             receipt_dicts.append(dataclasses.asdict(r))
