@@ -43,6 +43,10 @@ from nexus_learning.retrieval_audit import (
     AuditEntry,
     log_retrieval_audit,
 )
+from nexus_learning.state_root import (
+    LearningStateRoot,
+    resolve_learning_state_root,
+)
 
 __all__ = [
     "NEXUS_LEARNING_EPISODE_SCHEMA",
@@ -74,4 +78,6 @@ __all__ = [
     "OutcomeMemoryManager",
     "log_retrieval_audit",
     "AuditEntry",
+    "LearningStateRoot",
+    "resolve_learning_state_root",
 ]
