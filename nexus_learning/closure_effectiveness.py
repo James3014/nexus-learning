@@ -16,13 +16,17 @@ from nexus_learning.contracts import (
     paired_memory_uplift_observed,
 )
 from nexus_learning.episode_projection import project_learning_entries
+from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_root
 
 NEXUS_LEARNING_EPISODES_RELATIVE = Path(".nexus/memory/learning_episodes.jsonl")
 _APPEND_FALLBACK_LOCK = threading.Lock()
 
 
-def canonical_learning_episode_path(project_root: Path) -> Path:
-    return Path(project_root) / NEXUS_LEARNING_EPISODES_RELATIVE
+def canonical_learning_episode_path(project_root: Path | LearningStateRoot) -> Path:
+    if isinstance(project_root, LearningStateRoot):
+        return project_root.learning_episodes_path
+    return resolve_learning_state_root(project_root).learning_episodes_path
+
 
 
 @dataclass
@@ -139,13 +143,14 @@ def load_learning_closures(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def load_canonical_learning_episodes(project_root: Path) -> list[dict[str, Any]]:
+def load_canonical_learning_episodes(project_root: Path | LearningStateRoot) -> list[dict[str, Any]]:
     """Load only canonical episodes; legacy projections remain separate."""
     return [
         entry
         for entry in load_learning_closures(canonical_learning_episode_path(project_root))
         if isinstance(entry, dict) and entry.get("schema") == "nexus.learning_episode.v1"
     ]
+
 
 
 def classify_closure_effectiveness(entry: dict[str, Any]) -> str:

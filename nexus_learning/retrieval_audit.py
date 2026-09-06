@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,10 +28,17 @@ class AuditEntry:
 
 class RetrievalAuditLogger:
     """Appends structured retrieval events to .nexus/audit/retrieval_log.jsonl"""
-    def __init__(self, project_root: Path):
-        self.log_dir = project_root / ".nexus" / "audit"
+    def __init__(self, project_root: Path | LearningStateRoot):
+        state_root = (
+            project_root
+            if isinstance(project_root, LearningStateRoot)
+            else resolve_learning_state_root(project_root)
+        )
+        self.state_root = state_root
+        self.log_dir = state_root.audit_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.log_file = self.log_dir / "retrieval_log.jsonl"
+        self.log_file = state_root.retrieval_log_path
+
 
     def log(self, entry: AuditEntry) -> None:
         record = {
@@ -54,8 +63,13 @@ class RetrievalAuditLogger:
 _global_auditor: RetrievalAuditLogger | None = None
 
 
-def log_retrieval_audit(entry: AuditEntry, project_root: Path) -> None:
+def log_retrieval_audit(entry: AuditEntry, project_root: Path | LearningStateRoot) -> None:
     global _global_auditor
-    if not _global_auditor or _global_auditor.log_dir.parent != project_root / ".nexus":
-        _global_auditor = RetrievalAuditLogger(Path(project_root))
+    resolved_root = (
+        project_root.root
+        if isinstance(project_root, LearningStateRoot)
+        else resolve_learning_state_root(project_root).root
+    )
+    if not _global_auditor or _global_auditor.state_root.root != resolved_root:
+        _global_auditor = RetrievalAuditLogger(resolved_root)
     _global_auditor.log(entry)

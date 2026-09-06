@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_root
+
 OUTCOME_MEMORY_SCHEMA = "nexus_outcome_memory_episode.v1"
 LEARNING_EPISODE_SCHEMA = "nexus.learning_episode.v1"
 DYNAMIC_LEARNING_POLICY_SCHEMA = "nexus_dynamic_learning_policy.v1"
@@ -173,25 +175,45 @@ class OutcomeMemoryManager:
         cls,
         record: EpisodeOutcomeRecord,
         *,
-        project_root: Path | None = None,
+        project_root: Path | LearningStateRoot | None = None,
+        allow_dev_cwd_fallback: bool = False,
     ) -> dict[str, Any]:
-        return await asyncio.to_thread(cls.save_episode_and_tune_sync, record, project_root=project_root)
+        return await asyncio.to_thread(
+            cls.save_episode_and_tune_sync,
+            record,
+            project_root=project_root,
+            allow_dev_cwd_fallback=allow_dev_cwd_fallback,
+        )
 
     @classmethod
     def save_episode_and_tune_sync(
         cls,
         record: EpisodeOutcomeRecord,
         *,
-        project_root: Path | None = None,
+        project_root: Path | LearningStateRoot | None = None,
+        allow_dev_cwd_fallback: bool = False,
     ) -> dict[str, Any]:
-        storage_path = _resolve(project_root, cls.STORAGE_PATH)
+        state_root = (
+            project_root
+            if isinstance(project_root, LearningStateRoot)
+            else resolve_learning_state_root(
+                project_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+            )
+        )
+        storage_path = state_root.outcome_history_path
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         existing_keys = _load_idempotency_keys(storage_path)
         if record.idempotency_key and record.idempotency_key in existing_keys:
-            return {"schema_version": "nexus_outcome_memory_write.v1", "status": "IDEMPOTENT_DUPLICATE", "storage_path": str(cls.STORAGE_PATH)}
+            return {
+                "schema_version": "nexus_outcome_memory_write.v1",
+                "status": "IDEMPOTENT_DUPLICATE",
+                "storage_path": str(cls.STORAGE_PATH),
+            }
         with storage_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
-        policy = cls.run_dynamic_autotune_sync(project_root=project_root)
+        policy = cls.run_dynamic_autotune_sync(
+            project_root=state_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+        )
         return {
             "schema_version": "nexus_outcome_memory_write.v1",
             "status": "PASS",
@@ -201,8 +223,24 @@ class OutcomeMemoryManager:
         }
 
     @classmethod
-    def run_dynamic_autotune_sync(cls, *, project_root: Path | None = None) -> dict[str, Any]:
-        records = cls.load_recent_records(project_root=project_root, limit=cls.RECENT_LIMIT)
+    def run_dynamic_autotune_sync(
+        cls,
+        *,
+        project_root: Path | LearningStateRoot | None = None,
+        allow_dev_cwd_fallback: bool = False,
+    ) -> dict[str, Any]:
+        state_root = (
+            project_root
+            if isinstance(project_root, LearningStateRoot)
+            else resolve_learning_state_root(
+                project_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+            )
+        )
+        records = cls.load_recent_records(
+            project_root=state_root,
+            limit=cls.RECENT_LIMIT,
+            allow_dev_cwd_fallback=allow_dev_cwd_fallback,
+        )
         eligible_records = [
             record
             for record in records
@@ -269,18 +307,31 @@ class OutcomeMemoryManager:
             "enforce_penalties": False,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        policy_path = _resolve(project_root, cls.POLICY_PATH)
+        policy_path = state_root.dynamic_policy_path
         policy_path.parent.mkdir(parents=True, exist_ok=True)
         policy_path.write_text(json.dumps(policy, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         return policy
 
     @classmethod
-    def append_worker_write(cls, receipt: dict[str, Any], *, project_root: Path | None = None) -> dict[str, Any]:
+    def append_worker_write(
+        cls,
+        receipt: dict[str, Any],
+        *,
+        project_root: Path | LearningStateRoot | None = None,
+        allow_dev_cwd_fallback: bool = False,
+    ) -> dict[str, Any]:
         if "task_id" not in receipt:
             raise ValueError("Missing required field: task_id")
         if "worker_name" not in receipt:
             raise ValueError("Missing required field: worker_name")
-        storage_path = _resolve(project_root, cls.STORAGE_PATH)
+        state_root = (
+            project_root
+            if isinstance(project_root, LearningStateRoot)
+            else resolve_learning_state_root(
+                project_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+            )
+        )
+        storage_path = state_root.outcome_history_path
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         with storage_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
@@ -290,8 +341,21 @@ class OutcomeMemoryManager:
         }
 
     @classmethod
-    def load_recent_records(cls, *, project_root: Path | None = None, limit: int = RECENT_LIMIT) -> list[dict[str, Any]]:
-        storage_path = _resolve(project_root, cls.STORAGE_PATH)
+    def load_recent_records(
+        cls,
+        *,
+        project_root: Path | LearningStateRoot | None = None,
+        limit: int = RECENT_LIMIT,
+        allow_dev_cwd_fallback: bool = False,
+    ) -> list[dict[str, Any]]:
+        state_root = (
+            project_root
+            if isinstance(project_root, LearningStateRoot)
+            else resolve_learning_state_root(
+                project_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+            )
+        )
+        storage_path = state_root.outcome_history_path
         if not storage_path.exists():
             return []
         rows: list[dict[str, Any]] = []
@@ -340,10 +404,23 @@ def _recency_weights(count: int, *, minimum: float) -> list[float]:
     return [round(floor + (step * index), 4) for index in range(count)]
 
 
-def _resolve(project_root: Path | None, path: Path) -> Path:
+def _resolve(
+    project_root: Path | LearningStateRoot | None,
+    path: Path,
+    *,
+    allow_dev_cwd_fallback: bool = False,
+) -> Path:
     if path.is_absolute():
         return path
-    return (project_root or Path.cwd()) / path
+    state_root = (
+        project_root
+        if isinstance(project_root, LearningStateRoot)
+        else resolve_learning_state_root(
+            project_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+        )
+    )
+    return state_root.root / path
+
 
 
 def _load_idempotency_keys(storage_path: Path) -> set[str]:
