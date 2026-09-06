@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, NoReturn
 
 from nexus_learning.coverage_contract import (
     CoverageContractError,
@@ -52,7 +52,7 @@ def _probe_rows(contract: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _memory_error(message: str, exc: Exception | None = None) -> None:
+def _memory_error(message: str, exc: Exception | None = None) -> NoReturn:
     error = CoverageContractError(f"memory pair {message}")
     if exc is None:
         raise error
@@ -91,6 +91,8 @@ def _memory_signal(
         if not isinstance(arm, Mapping) or set(arm) != {"receipt_handle"}:
             _memory_error(f"{arm_name} input shape invalid")
         receipt_handle = arm.get("receipt_handle")
+        if not isinstance(receipt_handle, str):
+            _memory_error(f"{arm_name} receipt handle invalid")
         try:
             receipt = resolve_evidence_handle(
                 evidence_resolver,

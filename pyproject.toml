@@ -40,4 +40,4 @@ pythonpath = ["."]
 
 [tool.pyright]
 include = ["nexus_learning"]
-typeCheckingMode = "off"
+typeCheckingMode = "basic"

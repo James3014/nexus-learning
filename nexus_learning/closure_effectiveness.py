@@ -149,9 +149,12 @@ def load_canonical_learning_episodes(project_root: Path) -> list[dict[str, Any]]
 
 
 def classify_closure_effectiveness(entry: dict[str, Any]) -> str:
-    stages = entry.get("stages") if isinstance(entry.get("stages"), dict) else {}
-    evidence = entry.get("terminal_evidence") if isinstance(entry.get("terminal_evidence"), dict) else {}
-    qualification = entry.get("qualification") if isinstance(entry.get("qualification"), dict) else {}
+    raw_stages = entry.get("stages")
+    stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
+    raw_evidence = entry.get("terminal_evidence")
+    evidence: dict[str, Any] = raw_evidence if isinstance(raw_evidence, dict) else {}
+    raw_qual = entry.get("qualification")
+    qualification: dict[str, Any] = raw_qual if isinstance(raw_qual, dict) else {}
     qualification_complete = bool(
         qualification.get("repeatability")
         and qualification.get("prevention_rule")
@@ -179,7 +182,8 @@ def evaluate_effectiveness(entries: list[dict[str, Any]]) -> EffectivenessReport
     data_exists = retrieved = applied = measured = uplift = 0
     projected = project_learning_entries(entries)
     for entry in entries:
-        stages = entry.get("stages") if isinstance(entry.get("stages"), dict) else {}
+        raw_stages = entry.get("stages")
+        stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
         data_exists += int(bool(stages.get("recorded", entry.get("learning_write_succeeded", False))))
         retrieved += int(bool(stages.get("retrieved", entry.get("retrieved_lesson_ids"))))
         applied += int(bool(stages.get("applied", entry.get("applied_lesson_ids"))))

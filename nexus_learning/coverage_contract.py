@@ -7,7 +7,7 @@ import inspect
 import json
 import re
 from pathlib import Path
-from typing import Any, Mapping, Protocol, TypeAlias, runtime_checkable
+from typing import Any, Mapping, NoReturn, Protocol, TypeAlias, runtime_checkable
 
 from nexus_learning import contracts as learning_experience
 from nexus_learning.contracts import CAPABILITY_TAXONOMY
@@ -87,9 +87,11 @@ class EvidenceResolver(Protocol):
 
     def resolve(self, handle: str) -> EvidencePayload | None:
         """Return exact content without changing resolver state."""
+        ...
 
     def snapshot_digest(self) -> str:
         """Return a deterministic digest of all resolver-visible state."""
+        ...
 
 
 EvidenceResolverInput: TypeAlias = EvidenceResolver | Mapping[str, EvidencePayload]
@@ -296,7 +298,7 @@ def build_coverage_contract(
     return contract
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     raise CoverageContractError(message)
 
 
