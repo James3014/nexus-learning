@@ -235,19 +235,23 @@ class OutcomeMemoryManager:
         )
         storage_path = state_root.outcome_history_path
         storage_path.parent.mkdir(parents=True, exist_ok=True)
+        duplicate = False
         with _locked_outcome_write(storage_path):
             existing_keys = _load_idempotency_keys(storage_path)
             if record.idempotency_key and record.idempotency_key in existing_keys:
-                return {
-                    "schema_version": "nexus_outcome_memory_write.v1",
-                    "status": "IDEMPOTENT_DUPLICATE",
-                    "storage_path": str(cls.STORAGE_PATH),
-                }
-            with storage_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+                duplicate = True
+            else:
+                with storage_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
         policy = cls.run_dynamic_autotune_sync(
             project_root=state_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
         )
+        if duplicate:
+            return {
+                "schema_version": "nexus_outcome_memory_write.v1",
+                "status": "IDEMPOTENT_DUPLICATE",
+                "storage_path": str(cls.STORAGE_PATH),
+            }
         return {
             "schema_version": "nexus_outcome_memory_write.v1",
             "status": "PASS",
