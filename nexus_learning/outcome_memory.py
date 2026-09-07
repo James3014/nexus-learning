@@ -35,7 +35,7 @@ def _thread_lock_for(storage_path: Path) -> threading.Lock:
 
 @contextmanager
 def _locked_outcome_write(storage_path: Path) -> Iterator[None]:
-    """Serialize one outcome history read/check/append boundary per state root."""
+    """Serialize one outcome history and derived-policy write boundary per state root."""
     with _thread_lock_for(storage_path):
         if fcntl is None:
             yield
@@ -243,9 +243,9 @@ class OutcomeMemoryManager:
             else:
                 with storage_path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
-        policy = cls.run_dynamic_autotune_sync(
-            project_root=state_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
-        )
+            policy = cls.run_dynamic_autotune_sync(
+                project_root=state_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
+            )
         if duplicate:
             return {
                 "schema_version": "nexus_outcome_memory_write.v1",
