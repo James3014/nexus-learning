@@ -3,10 +3,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX thread fallback
+    fcntl = None  # type: ignore[assignment]
 
 from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_root
 
@@ -15,6 +22,32 @@ LEARNING_EPISODE_SCHEMA = "nexus.learning_episode.v1"
 DYNAMIC_LEARNING_POLICY_SCHEMA = "nexus_dynamic_learning_policy.v1"
 TERMINAL_OUTCOMES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "PROCESS_LOST", "PARKED", "RETIRED"})
 QUALIFIED_TERMINAL_OUTCOMES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+
+_OUTCOME_WRITE_LOCKS: dict[Path, threading.Lock] = {}
+_OUTCOME_WRITE_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock_for(storage_path: Path) -> threading.Lock:
+    key = storage_path.resolve()
+    with _OUTCOME_WRITE_LOCKS_GUARD:
+        return _OUTCOME_WRITE_LOCKS.setdefault(key, threading.Lock())
+
+
+@contextmanager
+def _locked_outcome_write(storage_path: Path) -> Iterator[None]:
+    """Serialize one outcome history read/check/append boundary per state root."""
+    with _thread_lock_for(storage_path):
+        if fcntl is None:
+            yield
+            return
+        lock_path = storage_path.with_name(storage_path.name + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -202,15 +235,16 @@ class OutcomeMemoryManager:
         )
         storage_path = state_root.outcome_history_path
         storage_path.parent.mkdir(parents=True, exist_ok=True)
-        existing_keys = _load_idempotency_keys(storage_path)
-        if record.idempotency_key and record.idempotency_key in existing_keys:
-            return {
-                "schema_version": "nexus_outcome_memory_write.v1",
-                "status": "IDEMPOTENT_DUPLICATE",
-                "storage_path": str(cls.STORAGE_PATH),
-            }
-        with storage_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+        with _locked_outcome_write(storage_path):
+            existing_keys = _load_idempotency_keys(storage_path)
+            if record.idempotency_key and record.idempotency_key in existing_keys:
+                return {
+                    "schema_version": "nexus_outcome_memory_write.v1",
+                    "status": "IDEMPOTENT_DUPLICATE",
+                    "storage_path": str(cls.STORAGE_PATH),
+                }
+            with storage_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
         policy = cls.run_dynamic_autotune_sync(
             project_root=state_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
         )
@@ -250,8 +284,6 @@ class OutcomeMemoryManager:
                     str(record.get("qualification_status") or "UNQUALIFIED").upper() == "QUALIFIED"
                     and bool(record.get("qualification_evidence_present", False))
                 )
-                # A selected-but-not-invoked capability is a safe negative signal;
-                # it never promotes or claims uplift and needs no terminal evidence.
                 or any(
                     isinstance(item, Mapping)
                     and item.get("selected")
@@ -420,7 +452,6 @@ def _resolve(
         )
     )
     return state_root.root / path
-
 
 
 def _load_idempotency_keys(storage_path: Path) -> set[str]:
