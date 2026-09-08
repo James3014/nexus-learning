@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AuditEntry:
     """Retrieval audit entry."""
+
     query: str
     threshold: float
     top_k: int
@@ -28,6 +29,7 @@ class AuditEntry:
 
 class RetrievalAuditLogger:
     """Appends structured retrieval events to .nexus/audit/retrieval_log.jsonl"""
+
     def __init__(self, project_root: Path | LearningStateRoot):
         state_root = (
             project_root
@@ -38,7 +40,6 @@ class RetrievalAuditLogger:
         self.log_dir = state_root.audit_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = state_root.retrieval_log_path
-
 
     def log(self, entry: AuditEntry) -> None:
         record = {
@@ -51,13 +52,18 @@ class RetrievalAuditLogger:
             "top_k": entry.top_k,
             "embedding_version": entry.embedding_version,
             "hits": [{"skill_id": sid, "score": score} for sid, score in entry.hits],
-            "context": entry.context or {}
+            "context": entry.context or {},
         }
         try:
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, default=str) + "\n")
         except Exception as e:
-            logger.warning("retrieval_audit_logger_failed task_id=%s trace_id=%s: %s", entry.task_id, entry.trace_id, e)
+            logger.warning(
+                "retrieval_audit_logger_failed task_id=%s trace_id=%s: %s",
+                entry.task_id,
+                entry.trace_id,
+                e,
+            )
 
 
 _global_auditor: RetrievalAuditLogger | None = None

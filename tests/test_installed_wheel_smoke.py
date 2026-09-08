@@ -12,7 +12,9 @@ def test_installed_wheel_smoke_in_isolated_venv(tmp_path: Path):
     dist_dir = repo_root / "dist"
     wheels = sorted(dist_dir.glob("nexus_learning-*.whl"))
     if not wheels:
-        res_build = subprocess.run(["uv", "build"], cwd=str(repo_root), capture_output=True, text=True)
+        res_build = subprocess.run(
+            ["uv", "build"], cwd=str(repo_root), capture_output=True, text=True
+        )
         if res_build.returncode != 0:
             pytest.fail(f"Failed to build nexus-learning wheel: {res_build.stderr}")
         wheels = sorted(dist_dir.glob("nexus_learning-*.whl"))

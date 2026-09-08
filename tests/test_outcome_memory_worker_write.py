@@ -9,7 +9,6 @@ from nexus_learning.outcome_memory import OutcomeMemoryManager
 
 
 class TestOutcomeMemoryWorkerWrite:
-
     def test_append_worker_write_validates_required_fields(self, tmp_path: Path):
         with pytest.raises(ValueError, match="task_id"):
             OutcomeMemoryManager.append_worker_write({"worker_name": "w1"}, project_root=tmp_path)
@@ -91,7 +90,9 @@ class TestOutcomeMemoryWorkerWrite:
         assert parked.qualification_status == "UNQUALIFIED"
         assert parked.auto_replay_allowed is False
         OutcomeMemoryManager.save_episode_and_tune_sync(parked, project_root=tmp_path)
-        payload = json.loads((tmp_path / ".nexus/memory/outcome_history.jsonl").read_text().splitlines()[0])
+        payload = json.loads(
+            (tmp_path / ".nexus/memory/outcome_history.jsonl").read_text().splitlines()[0]
+        )
         assert payload["attempt_id"] == "a1"
         assert payload["terminal_outcome"] == "PROCESS_LOST"
         assert payload["auto_replay_allowed"] is False

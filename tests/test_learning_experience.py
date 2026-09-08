@@ -35,6 +35,7 @@ class LearningSteward:
             export_ready=export_ready,
         )
 
+
 class CapabilityPlanner:
     def plan(self, task_desc, task_type, route, budget=None):
         budget_dict = budget or {}
@@ -49,10 +50,17 @@ class CapabilityPlanner:
         )
 
 
-
 def test_learning_experience_unifies_phase_capability_and_gate_chain() -> None:
     usage_trace = {
-        "phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"},
+        "phase_trace": {
+            "S": "start",
+            "P": "plan",
+            "X": "context",
+            "D": "design",
+            "R": "repair",
+            "A": "audit",
+            "C": "close",
+        },
         "capabilities": {
             "artifact_gate_passed": True,
             "artifact_refs": ["artifact:task:tests_passed"],
@@ -145,7 +153,15 @@ def test_learning_experience_escalates_failed_hyper_and_gates_autodata_export() 
         task_id="task-2",
         task_type="bug",
         usage_trace={
-            "phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"},
+            "phase_trace": {
+                "S": "start",
+                "P": "plan",
+                "X": "context",
+                "D": "design",
+                "R": "repair",
+                "A": "audit",
+                "C": "close",
+            },
             "capabilities": {
                 "artifact_gate_passed": True,
                 "artifact_refs": ["artifact:task-2"],
@@ -196,7 +212,15 @@ def test_model_training_gate_fails_closed_without_autodata_or_s2t_trace() -> Non
         task_id="task-no-trace",
         task_type="bug",
         usage_trace={
-            "phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"},
+            "phase_trace": {
+                "S": "start",
+                "P": "plan",
+                "X": "context",
+                "D": "design",
+                "R": "repair",
+                "A": "audit",
+                "C": "close",
+            },
             "capabilities": {
                 "artifact_gate_passed": True,
                 "claim_verified": True,
@@ -229,7 +253,15 @@ def test_model_training_gate_blocks_leakage_and_reward_hacking_risk() -> None:
         task_id="task-risk",
         task_type="bug",
         usage_trace={
-            "phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"},
+            "phase_trace": {
+                "S": "start",
+                "P": "plan",
+                "X": "context",
+                "D": "design",
+                "R": "repair",
+                "A": "audit",
+                "C": "close",
+            },
             "capabilities": {
                 "artifact_gate_passed": True,
                 "claim_verified": True,
@@ -273,7 +305,15 @@ def test_promoted_learning_policy_artifact_round_trips_verified_experience(tmp_p
         task_id="task-3",
         task_type="bug",
         usage_trace={
-            "phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"},
+            "phase_trace": {
+                "S": "start",
+                "P": "plan",
+                "X": "context",
+                "D": "design",
+                "R": "repair",
+                "A": "audit",
+                "C": "close",
+            },
             "capabilities": {
                 "artifact_gate_passed": True,
                 "artifact_refs": ["artifact:task-3"],
@@ -310,7 +350,17 @@ def test_promoted_learning_policy_accumulates_recent_high_cost_roi_penalties(tmp
     first = build_learning_experience(
         task_id="task-roi-1",
         task_type="bug",
-        usage_trace={"phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"}},
+        usage_trace={
+            "phase_trace": {
+                "S": "start",
+                "P": "plan",
+                "X": "context",
+                "D": "design",
+                "R": "repair",
+                "A": "audit",
+                "C": "close",
+            }
+        },
         capability_receipts=[
             {"name": "research", "selected": True, "invoked": False},
             {"name": "external_doc_scout", "selected": True, "invoked": False},
@@ -319,9 +369,25 @@ def test_promoted_learning_policy_accumulates_recent_high_cost_roi_penalties(tmp
     second = build_learning_experience(
         task_id="task-roi-2",
         task_type="bug",
-        usage_trace={"phase_trace": {"S": "start", "P": "plan", "X": "context", "D": "design", "R": "repair", "A": "audit", "C": "close"}},
+        usage_trace={
+            "phase_trace": {
+                "S": "start",
+                "P": "plan",
+                "X": "context",
+                "D": "design",
+                "R": "repair",
+                "A": "audit",
+                "C": "close",
+            }
+        },
         capability_receipts=[
-            {"name": "research", "selected": True, "invoked": True, "evidence_present": False, "outcome_contributed": False},
+            {
+                "name": "research",
+                "selected": True,
+                "invoked": True,
+                "evidence_present": False,
+                "outcome_contributed": False,
+            },
             {"name": "external_doc_scout", "selected": True, "invoked": False},
         ],
     )
@@ -342,6 +408,7 @@ def test_promoted_learning_policy_accumulates_recent_high_cost_roi_penalties(tmp
 # G5 & G6 Learning Policy Recommendation & Validation Tests
 # ==============================================================================
 
+
 def test_g5_recommendation_is_content_addressed_and_evidence_bound():
     from nexus_learning.contracts import (
         LEARNING_POLICY_RECOMMENDATION_SCHEMA,
@@ -355,7 +422,11 @@ def test_g5_recommendation_is_content_addressed_and_evidence_bound():
         source="runtime_closure",
         terminal_outcome="SUCCESS",
         terminal_evidence={"verifier": "pytest", "receipt": "rec_A", "verifier_status": "passed"},
-        qualification={"repeatability": True, "prevention_rule": "rule", "authority_qualification": True},
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
@@ -374,7 +445,10 @@ def test_g5_recommendation_is_content_addressed_and_evidence_bound():
         recommended_policy_delta={"episodic_memory_injection": {"enabled": True}},
         current_policy={"episodic_memory_injection": {"enabled": False}},
         expected_effect="Improve pass rate",
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
 
     assert rec["schema"] == LEARNING_POLICY_RECOMMENDATION_SCHEMA
@@ -401,7 +475,11 @@ def test_g5_negative_controls_fail_closed():
         source="runtime_closure",
         terminal_outcome="SUCCESS",
         terminal_evidence={"verifier": "pytest", "receipt": "rec_A", "verifier_status": "passed"},
-        qualification={"repeatability": True, "prevention_rule": "rule", "authority_qualification": True},
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
@@ -537,7 +615,11 @@ def test_g6_independent_validation_and_hostile_probes():
         source="runtime_closure",
         terminal_outcome="SUCCESS",
         terminal_evidence={"verifier": "pytest", "receipt": "rec_A", "verifier_status": "passed"},
-        qualification={"repeatability": True, "prevention_rule": "rule", "authority_qualification": True},
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
@@ -553,7 +635,10 @@ def test_g6_independent_validation_and_hostile_probes():
         recommended_policy_delta={"episodic_memory_injection": {"enabled": True}},
         current_policy={"episodic_memory_injection": {"enabled": False}},
         expected_effect="Improve pass rate",
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
 
     # Positive witness
@@ -623,6 +708,7 @@ def test_g6_independent_validation_and_hostile_probes():
 # G7, G8, G10 Learning Policy Adoption, Planner Seam & Rollback Tests
 # ==============================================================================
 
+
 def test_g7_adoption_and_hostile_controls():
     import copy
 
@@ -642,7 +728,11 @@ def test_g7_adoption_and_hostile_controls():
         source="runtime_closure",
         terminal_outcome="SUCCESS",
         terminal_evidence={"verifier": "pytest", "receipt": "rec_A", "verifier_status": "passed"},
-        qualification={"repeatability": True, "prevention_rule": "rule", "authority_qualification": True},
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
@@ -654,11 +744,20 @@ def test_g7_adoption_and_hostile_controls():
         task_fingerprint="task_1",
         off_arm={"task_id": "task_1", "verifier_status": "failed", "receipt": "rec_off"},
         on_arm={"task_id": "task_1", "verifier_status": "passed", "receipt": "rec_on"},
-        applicable_scope={"task_family": "record_serialization", "model_name": "qwen2.5-coder:7b", "runtime_identity": "local_model_executor"},
-        recommended_policy_delta={"episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}},
+        applicable_scope={
+            "task_family": "record_serialization",
+            "model_name": "qwen2.5-coder:7b",
+            "runtime_identity": "local_model_executor",
+        },
+        recommended_policy_delta={
+            "episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}
+        },
         current_policy={"episodic_memory_injection": {"enabled": False}},
         expected_effect="Improve pass rate",
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
     val = evaluate_learning_policy_recommendation(
         rec,
@@ -673,10 +772,19 @@ def test_g7_adoption_and_hostile_controls():
         recommendation=rec,
         validation=val,
         source_revision="rev_current",
-        adopted_scope={"task_family": "record_serialization", "model_name": "qwen2.5-coder:7b", "runtime_identity": "local_model_executor"},
-        target_policy_delta={"episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}},
+        adopted_scope={
+            "task_family": "record_serialization",
+            "model_name": "qwen2.5-coder:7b",
+            "runtime_identity": "local_model_executor",
+        },
+        target_policy_delta={
+            "episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}
+        },
         previous_policy={"episodic_memory_injection": {"enabled": False}},
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
     assert adopt["schema"] == LEARNING_POLICY_ADOPTION_SCHEMA
     h, i = canonical_adoption_identity(adopt)
@@ -749,7 +857,11 @@ def test_g7_adoption_and_hostile_controls():
             recommendation=rec,
             validation=val,
             source_revision="rev_current",
-            adopted_scope={"task_family": "record_serialization", "model_name": "different_model:70b", "runtime_identity": "local_model_executor"},
+            adopted_scope={
+                "task_family": "record_serialization",
+                "model_name": "different_model:70b",
+                "runtime_identity": "local_model_executor",
+            },
             target_policy_delta={"mem": True},
             previous_policy={"mem": False},
             rollback_target={"target_state": {"mem": False}},
@@ -797,7 +909,11 @@ def test_g8_planner_consumption_and_negative_controls():
         source="runtime_closure",
         terminal_outcome="SUCCESS",
         terminal_evidence={"verifier": "pytest", "receipt": "rec_A", "verifier_status": "passed"},
-        qualification={"repeatability": True, "prevention_rule": "rule", "authority_qualification": True},
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
@@ -809,11 +925,20 @@ def test_g8_planner_consumption_and_negative_controls():
         task_fingerprint="task_1",
         off_arm={"task_id": "task_1", "verifier_status": "failed", "receipt": "rec_off"},
         on_arm={"task_id": "task_1", "verifier_status": "passed", "receipt": "rec_on"},
-        applicable_scope={"task_family": "record_serialization", "model_name": "qwen2.5-coder:7b", "runtime_identity": "local_model_executor"},
-        recommended_policy_delta={"episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}},
+        applicable_scope={
+            "task_family": "record_serialization",
+            "model_name": "qwen2.5-coder:7b",
+            "runtime_identity": "local_model_executor",
+        },
+        recommended_policy_delta={
+            "episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}
+        },
         current_policy={"episodic_memory_injection": {"enabled": False}},
         expected_effect="Improve pass rate",
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
     val = evaluate_learning_policy_recommendation(
         rec,
@@ -826,10 +951,19 @@ def test_g8_planner_consumption_and_negative_controls():
         recommendation=rec,
         validation=val,
         source_revision="rev_current",
-        adopted_scope={"task_family": "record_serialization", "model_name": "qwen2.5-coder:7b", "runtime_identity": "local_model_executor"},
-        target_policy_delta={"episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}},
+        adopted_scope={
+            "task_family": "record_serialization",
+            "model_name": "qwen2.5-coder:7b",
+            "runtime_identity": "local_model_executor",
+        },
+        target_policy_delta={
+            "episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}
+        },
         previous_policy={"episodic_memory_injection": {"enabled": False}},
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
 
     planner = CapabilityPlanner()
@@ -844,12 +978,18 @@ def test_g8_planner_consumption_and_negative_controls():
     plan = planner.plan(
         task_desc="repair record_serialization for user profile",
         task_type="repair",
-        route={"route_features": {"deterministic_verifier_available": True}, "workforce_admission_enabled": False},
+        route={
+            "route_features": {"deterministic_verifier_available": True},
+            "workforce_admission_enabled": False,
+        },
         budget=budget_in_scope,
     )
     assert "memory" in plan.selected_capabilities
     assert plan.signal_snapshot["learning_policy"]["episodic_memory_injection"]["enabled"] is True
-    assert plan.signal_snapshot["learning_policy"]["adoption_lineage"]["adoption_id"] == adopt["adoption_id"]
+    assert (
+        plan.signal_snapshot["learning_policy"]["adoption_lineage"]["adoption_id"]
+        == adopt["adoption_id"]
+    )
     assert plan.signal_snapshot["route_truth_source"] == "CapabilityPlanner"
 
     # G8-N1: unrelated task family
@@ -903,7 +1043,11 @@ def test_g10_rollback_and_hostile_controls():
         source="runtime_closure",
         terminal_outcome="SUCCESS",
         terminal_evidence={"verifier": "pytest", "receipt": "rec_A", "verifier_status": "passed"},
-        qualification={"repeatability": True, "prevention_rule": "rule", "authority_qualification": True},
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
@@ -915,11 +1059,20 @@ def test_g10_rollback_and_hostile_controls():
         task_fingerprint="task_1",
         off_arm={"task_id": "task_1", "verifier_status": "failed", "receipt": "rec_off"},
         on_arm={"task_id": "task_1", "verifier_status": "passed", "receipt": "rec_on"},
-        applicable_scope={"task_family": "record_serialization", "model_name": "qwen2.5-coder:7b", "runtime_identity": "local_model_executor"},
-        recommended_policy_delta={"episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}},
+        applicable_scope={
+            "task_family": "record_serialization",
+            "model_name": "qwen2.5-coder:7b",
+            "runtime_identity": "local_model_executor",
+        },
+        recommended_policy_delta={
+            "episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}
+        },
         current_policy={"episodic_memory_injection": {"enabled": False}},
         expected_effect="Improve pass rate",
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
     val = evaluate_learning_policy_recommendation(
         rec,
@@ -932,10 +1085,19 @@ def test_g10_rollback_and_hostile_controls():
         recommendation=rec,
         validation=val,
         source_revision="rev_current",
-        adopted_scope={"task_family": "record_serialization", "model_name": "qwen2.5-coder:7b", "runtime_identity": "local_model_executor"},
-        target_policy_delta={"episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}},
+        adopted_scope={
+            "task_family": "record_serialization",
+            "model_name": "qwen2.5-coder:7b",
+            "runtime_identity": "local_model_executor",
+        },
+        target_policy_delta={
+            "episodic_memory_injection": {"enabled": True, "scope": "record_serialization"}
+        },
         previous_policy={"episodic_memory_injection": {"enabled": False}},
-        rollback_target={"target_state": {"episodic_memory_injection": {"enabled": False}}, "trigger": "regression"},
+        rollback_target={
+            "target_state": {"episodic_memory_injection": {"enabled": False}},
+            "trigger": "regression",
+        },
     )
 
     # Positive G10 Rollback
@@ -960,10 +1122,15 @@ def test_g10_rollback_and_hostile_controls():
     plan_rb = planner.plan(
         task_desc="repair record_serialization for user profile",
         task_type="repair",
-        route={"route_features": {"deterministic_verifier_available": True}, "workforce_admission_enabled": False},
+        route={
+            "route_features": {"deterministic_verifier_available": True},
+            "workforce_admission_enabled": False,
+        },
         budget=budget_rb,
     )
-    assert plan_rb.signal_snapshot["learning_policy"]["episodic_memory_injection"]["enabled"] is False
+    assert (
+        plan_rb.signal_snapshot["learning_policy"]["episodic_memory_injection"]["enabled"] is False
+    )
 
     # G10-R1: rollback references wrong adoption
     with pytest.raises(ValueError, match="PROJECTION_ROLLBACK_ADOPTION_MISMATCH"):

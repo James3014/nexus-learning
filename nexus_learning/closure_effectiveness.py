@@ -28,7 +28,6 @@ def canonical_learning_episode_path(project_root: Path | LearningStateRoot) -> P
     return resolve_learning_state_root(project_root).learning_episodes_path
 
 
-
 @dataclass
 class EffectivenessReport:
     total_entries: int
@@ -102,7 +101,10 @@ def append_learning_episode(path: Path, episode: dict[str, Any]) -> bool:
                     for line in handle:
                         try:
                             row = json.loads(line)
-                            if isinstance(row, dict) and str(row.get("episode_id", "")) == episode_id:
+                            if (
+                                isinstance(row, dict)
+                                and str(row.get("episode_id", "")) == episode_id
+                            ):
                                 return True
                         except json.JSONDecodeError:
                             continue
@@ -163,14 +165,15 @@ def load_learning_closures(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def load_canonical_learning_episodes(project_root: Path | LearningStateRoot) -> list[dict[str, Any]]:
+def load_canonical_learning_episodes(
+    project_root: Path | LearningStateRoot,
+) -> list[dict[str, Any]]:
     """Load only canonical episodes; legacy projections remain separate."""
     return [
         entry
         for entry in load_learning_closures(canonical_learning_episode_path(project_root))
         if isinstance(entry, dict) and entry.get("schema") == "nexus.learning_episode.v1"
     ]
-
 
 
 def classify_closure_effectiveness(entry: dict[str, Any]) -> str:
@@ -209,7 +212,9 @@ def evaluate_effectiveness(entries: list[dict[str, Any]]) -> EffectivenessReport
     for entry in entries:
         raw_stages = entry.get("stages")
         stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
-        data_exists += int(bool(stages.get("recorded", entry.get("learning_write_succeeded", False))))
+        data_exists += int(
+            bool(stages.get("recorded", entry.get("learning_write_succeeded", False)))
+        )
         retrieved += int(bool(stages.get("retrieved", entry.get("retrieved_lesson_ids"))))
         applied += int(bool(stages.get("applied", entry.get("applied_lesson_ids"))))
         measured += int(bool(stages.get("outcome_measured")))
@@ -221,12 +226,17 @@ def evaluate_effectiveness(entries: list[dict[str, Any]]) -> EffectivenessReport
             degraded += 1
         else:
             no_change += 1
-        details.append({
-            "effect": effect,
-            "classification": entry.get("classification", entry.get("action", "unknown")),
-            "task_id": entry.get("task_id", "unknown"),
-            "status": entry.get("status", entry.get("writeback_status", entry.get("terminal_outcome", "unknown"))),
-        })
+        details.append(
+            {
+                "effect": effect,
+                "classification": entry.get("classification", entry.get("action", "unknown")),
+                "task_id": entry.get("task_id", "unknown"),
+                "status": entry.get(
+                    "status",
+                    entry.get("writeback_status", entry.get("terminal_outcome", "unknown")),
+                ),
+            }
+        )
     total = len(entries)
     return EffectivenessReport(
         total_entries=total,
@@ -263,5 +273,7 @@ def generate_effectiveness_report(entries: list[dict[str, Any]], output_path: Pa
         "",
     ]
     for d in report.details:
-        lines.append(f"- {d['effect']:>10} | {d['classification']:20} | task={d['task_id']:20} | status={d['status']}")
+        lines.append(
+            f"- {d['effect']:>10} | {d['classification']:20} | task={d['task_id']:20} | status={d['status']}"
+        )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

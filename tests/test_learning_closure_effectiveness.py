@@ -18,15 +18,18 @@ from nexus_learning.closure_effectiveness import (
 class LearningClosureBridge:
     def __init__(self, path, project_root=None, enable_findings=False):
         self.path = path
+
     def write_lesson(self, ctx):
         op = ctx.op
         terminal = getattr(op, "terminal_outcome", None)
         failure = getattr(op, "failure_reason", "")
         if not terminal:
-            terminal = "SUCCEEDED" if getattr(op, "solve_eligible", False) and not failure else "PARKED"
+            terminal = (
+                "SUCCEEDED" if getattr(op, "solve_eligible", False) and not failure else "PARKED"
+            )
         elif failure and terminal not in ("FAILED", "RETIRED"):
             terminal = "PARKED"
-        
+
         disposition = "shadow"
         if terminal == "SUCCEEDED" and getattr(op, "applied_lesson_ids", None):
             disposition = "reinforce"
@@ -34,8 +37,10 @@ class LearningClosureBridge:
             disposition = "contradict"
         elif terminal == "RETIRED":
             disposition = "retire"
-            
-        evidence_present = terminal in ("SUCCEEDED", "FAILED", "RETIRED") and bool(getattr(op, "receipt_path", None) or getattr(op, "solve_eligible", False))
+
+        evidence_present = terminal in ("SUCCEEDED", "FAILED", "RETIRED") and bool(
+            getattr(op, "receipt_path", None) or getattr(op, "solve_eligible", False)
+        )
         if terminal in ("FAILED", "RETIRED") and getattr(op, "final_patch", None):
             evidence_present = True
         return {
@@ -61,7 +66,11 @@ def test_learning_closure_loader_reads_jsonl(tmp_path: Path):
 def test_real_learning_closure_12_task_evaluation():
     entries = [
         {"status": "ok", "classification": "verifier_pass", "task_id": "task_001"},
-        {"terminal_outcome": "FAILED", "terminal_evidence": {"verifier_status": "failed"}, "task_id": "task_002"},
+        {
+            "terminal_outcome": "FAILED",
+            "terminal_evidence": {"verifier_status": "failed"},
+            "task_id": "task_002",
+        },
         {"status": "ok", "classification": "correct_abstain", "task_id": "task_003"},
     ]
     report = evaluate_effectiveness(entries)
@@ -117,7 +126,11 @@ def test_real_learning_closure_improvement_rate():
         }
         for i in range(10)
     ] + [
-        {"terminal_outcome": "FAILED", "terminal_evidence": {"verifier_status": "failed"}, "task_id": f"task_{i:03d}"}
+        {
+            "terminal_outcome": "FAILED",
+            "terminal_evidence": {"verifier_status": "failed"},
+            "task_id": f"task_{i:03d}",
+        }
         for i in range(10, 15)
     ]
     report = evaluate_effectiveness(entries)
@@ -129,19 +142,31 @@ def test_real_learning_closure_improvement_rate():
 def test_classify_closure_effectiveness():
     assert classify_closure_effectiveness({"status": "ok"}) == "no_change"
     assert classify_closure_effectiveness({"status": "failed_non_blocking"}) == "no_change"
-    assert classify_closure_effectiveness({"terminal_outcome": "FAILED", "terminal_evidence": {"verifier_status": "failed"}}) == "degraded"
+    assert (
+        classify_closure_effectiveness(
+            {"terminal_outcome": "FAILED", "terminal_evidence": {"verifier_status": "failed"}}
+        )
+        == "degraded"
+    )
     assert classify_closure_effectiveness({"writeback_status": "ok"}) == "no_change"
-    assert classify_closure_effectiveness({"stages": {"outcome_uplift_observed": True}}) == "no_change"
+    assert (
+        classify_closure_effectiveness({"stages": {"outcome_uplift_observed": True}}) == "no_change"
+    )
     paired = {
         "task_fingerprint": "fp-forged",
         "memory_off": {"verifier_status": "fail", "artifact": "off.json"},
         "memory_on": {"verifier_status": "pass", "artifact": "on.json"},
     }
-    assert classify_closure_effectiveness({
-        "stages": {"outcome_uplift_observed": True},
-        "qualification_status": "QUALIFIED",
-        "terminal_evidence": {"paired_verifier": paired},
-    }) == "no_change"
+    assert (
+        classify_closure_effectiveness(
+            {
+                "stages": {"outcome_uplift_observed": True},
+                "qualification_status": "QUALIFIED",
+                "terminal_evidence": {"paired_verifier": paired},
+            }
+        )
+        == "no_change"
+    )
     assert classify_closure_effectiveness({}) == "no_change"
 
 
@@ -222,7 +247,9 @@ def test_learning_closure_tracks_retrieved_applied_lessons_and_terminal_disposit
         uncertain_mutation=False,
     )
     ctx = SimpleNamespace(op=op)
-    result = LearningClosureBridge(path=tmp_path / "closure.jsonl", project_root=tmp_path, enable_findings=False).write_lesson(ctx)
+    result = LearningClosureBridge(
+        path=tmp_path / "closure.jsonl", project_root=tmp_path, enable_findings=False
+    ).write_lesson(ctx)
     assert result["attempt_id"] == "attempt-1"
     assert result["retrieved_lesson_ids"] == ["lesson-old"]
     assert result["applied_lesson_ids"] == ["lesson-old"]
@@ -236,9 +263,9 @@ def test_failed_without_terminal_decision_is_parked(tmp_path: Path):
     # using local LearningClosureBridge
 
     op = SimpleNamespace(instance_id="task-park", failure_reason="provider failed", final_patch="")
-    result = LearningClosureBridge(path=tmp_path / "closure.jsonl", project_root=tmp_path, enable_findings=False).write_lesson(
-        SimpleNamespace(op=op)
-    )
+    result = LearningClosureBridge(
+        path=tmp_path / "closure.jsonl", project_root=tmp_path, enable_findings=False
+    ).write_lesson(SimpleNamespace(op=op))
     assert result["terminal_outcome"] == "PARKED"
     assert result["qualification_status"] == "UNQUALIFIED"
     assert result["auto_replay_allowed"] is False
@@ -249,7 +276,9 @@ def test_terminal_outcomes_can_contradict_or_retire_applied_lessons(tmp_path: Pa
     from types import SimpleNamespace
     # using local LearningClosureBridge
 
-    bridge = LearningClosureBridge(path=tmp_path / "closure.jsonl", project_root=tmp_path, enable_findings=False)
+    bridge = LearningClosureBridge(
+        path=tmp_path / "closure.jsonl", project_root=tmp_path, enable_findings=False
+    )
     for terminal, expected in (("FAILED", "contradict"), ("RETIRED", "retire")):
         op = SimpleNamespace(
             instance_id=f"task-{terminal.lower()}",
