@@ -95,6 +95,9 @@ def append_learning_episode(path: Path, episode: dict[str, Any]) -> bool:
                 if fcntl is not None:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
                 try:
+                    tail_state = _validate_unterminated_tail(path)
+                    if tail_state is False:
+                        return False
                     handle.seek(0)
                     for line in handle:
                         try:
@@ -104,6 +107,8 @@ def append_learning_episode(path: Path, episode: dict[str, Any]) -> bool:
                         except json.JSONDecodeError:
                             continue
                     handle.seek(0, 2)
+                    if tail_state is True:
+                        handle.write("\n")
                     handle.write(json.dumps(episode, ensure_ascii=False) + "\n")
                     handle.flush()
                     return True
@@ -112,6 +117,21 @@ def append_learning_episode(path: Path, episode: dict[str, Any]) -> bool:
                         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _validate_unterminated_tail(path: Path) -> bool | None:
+    """Return valid-tail separator state, or invalid-tail/complete-boundary state."""
+    raw = path.read_bytes()
+    if not raw or not raw.strip() or raw.endswith(b"\n"):
+        return None
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        tail = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return False
+    return isinstance(tail, dict)
 
 
 def learning_episode_exists(path: Path, episode_id: str) -> bool:
