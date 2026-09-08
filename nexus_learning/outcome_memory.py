@@ -57,6 +57,8 @@ def _validate_outcome_history_tail(storage_path: Path) -> bool:
     raw = storage_path.read_bytes()
     if not raw or not raw.strip():
         return False
+    if raw.endswith(b"\n"):
+        return False
     lines = [line for line in raw.splitlines() if line.strip()]
     if not lines:
         return False
@@ -66,7 +68,7 @@ def _validate_outcome_history_tail(storage_path: Path) -> bool:
         raise ValueError("OUTCOME_HISTORY_TAIL_INVALID") from exc
     if not isinstance(tail, Mapping):
         raise ValueError("OUTCOME_HISTORY_TAIL_INVALID")
-    return not raw.endswith(b"\n")
+    return True
 
 
 @dataclass(frozen=True)
