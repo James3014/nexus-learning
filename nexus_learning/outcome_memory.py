@@ -50,6 +50,27 @@ def _locked_outcome_write(storage_path: Path) -> Iterator[None]:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
+def _validate_outcome_history_tail(storage_path: Path) -> bool:
+    """Validate the append boundary and return whether a separator is needed."""
+    if not storage_path.exists():
+        return False
+    raw = storage_path.read_bytes()
+    if not raw or not raw.strip():
+        return False
+    if raw.endswith(b"\n"):
+        return False
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return False
+    try:
+        tail = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise ValueError("OUTCOME_HISTORY_TAIL_INVALID") from exc
+    if not isinstance(tail, Mapping):
+        raise ValueError("OUTCOME_HISTORY_TAIL_INVALID")
+    return True
+
+
 @dataclass(frozen=True)
 class EpisodeOutcomeRecord:
     task_id: str
@@ -237,6 +258,10 @@ class OutcomeMemoryManager:
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         duplicate = False
         with _locked_outcome_write(storage_path):
+            needs_separator = _validate_outcome_history_tail(storage_path)
+            if needs_separator:
+                with storage_path.open("ab") as handle:
+                    handle.write(b"\n")
             existing_keys = _load_idempotency_keys(storage_path)
             if record.idempotency_key and record.idempotency_key in existing_keys:
                 duplicate = True
@@ -369,8 +394,13 @@ class OutcomeMemoryManager:
         )
         storage_path = state_root.outcome_history_path
         storage_path.parent.mkdir(parents=True, exist_ok=True)
-        with storage_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
+        with _locked_outcome_write(storage_path):
+            needs_separator = _validate_outcome_history_tail(storage_path)
+            if needs_separator:
+                with storage_path.open("ab") as handle:
+                    handle.write(b"\n")
+            with storage_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
         return {
             "status": "PASS",
             "storage_path": str(cls.STORAGE_PATH),
