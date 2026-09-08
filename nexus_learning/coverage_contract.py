@@ -24,14 +24,16 @@ _BOOL_FIELDS = (
     "consumer_shadow_use",
     "verifier_proof",
 )
-_HANDLE_KINDS = frozenset({
-    "artifact",
-    "consumer_shadow",
-    "invocation",
-    "persistence",
-    "selection",
-    "verifier",
-})
+_HANDLE_KINDS = frozenset(
+    {
+        "artifact",
+        "consumer_shadow",
+        "invocation",
+        "persistence",
+        "selection",
+        "verifier",
+    }
+)
 _HANDLE = re.compile(
     r"^(artifact|consumer_shadow|invocation|persistence|selection|verifier):sha256:[0-9a-f]{64}$"
 )
@@ -273,17 +275,19 @@ def build_coverage_contract(
         levels = dict(raw.get("evidence_levels") or {})
         levels = {key: levels.get(key, "missing") for key in ("W", "F", "P", "S")}
         handles = sorted(raw.get("source_handles") or [])
-        rows.append({
-            "capability": capability,
-            "category": meta["category"],
-            "phases": list(meta["phases"]),
-            "taxonomy_source_handle": _taxonomy_handle(capability),
-            **values,
-            "evidence_levels": levels,
-            "source_handles": handles,
-            "missingness": sorted(set(str(item) for item in missingness)),
-            "claim_ceiling": CLAIM_CEILING,
-        })
+        rows.append(
+            {
+                "capability": capability,
+                "category": meta["category"],
+                "phases": list(meta["phases"]),
+                "taxonomy_source_handle": _taxonomy_handle(capability),
+                **values,
+                "evidence_levels": levels,
+                "source_handles": handles,
+                "missingness": sorted(set(str(item) for item in missingness)),
+                "claim_ceiling": CLAIM_CEILING,
+            }
+        )
     normalized_task_id = task_id.strip() if isinstance(task_id, str) else None
     if task_id is not None and not normalized_task_id:
         raise CoverageContractError("task identity invalid")

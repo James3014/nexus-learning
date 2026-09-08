@@ -20,7 +20,9 @@ from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_
 OUTCOME_MEMORY_SCHEMA = "nexus_outcome_memory_episode.v1"
 LEARNING_EPISODE_SCHEMA = "nexus.learning_episode.v1"
 DYNAMIC_LEARNING_POLICY_SCHEMA = "nexus_dynamic_learning_policy.v1"
-TERMINAL_OUTCOMES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "PROCESS_LOST", "PARKED", "RETIRED"})
+TERMINAL_OUTCOMES = frozenset(
+    {"SUCCEEDED", "FAILED", "CANCELLED", "PROCESS_LOST", "PARKED", "RETIRED"}
+)
 QUALIFIED_TERMINAL_OUTCOMES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 
 _OUTCOME_WRITE_LOCKS: dict[Path, threading.Lock] = {}
@@ -136,9 +138,13 @@ class EpisodeOutcomeRecord:
         normalized_receipts = [dict(item) for item in receipts if isinstance(item, Mapping)]
         evidence = dict(terminal_evidence or {})
         inferred_evidence = bool(qualification_evidence_present) or bool(
-            evidence.get("verifier") or evidence.get("verifier_status") or evidence.get("receipt")
+            evidence.get("verifier")
+            or evidence.get("verifier_status")
+            or evidence.get("receipt")
             or any(
-                isinstance(item, Mapping) and item.get("evidence_present") and item.get("gate_passed")
+                isinstance(item, Mapping)
+                and item.get("evidence_present")
+                and item.get("gate_passed")
                 for item in normalized_receipts
             )
         )
@@ -267,7 +273,9 @@ class OutcomeMemoryManager:
                 duplicate = True
             else:
                 with storage_path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+                    handle.write(
+                        json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+                    )
             policy = cls.run_dynamic_autotune_sync(
                 project_root=state_root, allow_dev_cwd_fallback=allow_dev_cwd_fallback
             )
@@ -314,9 +322,7 @@ class OutcomeMemoryManager:
                     and bool(record.get("qualification_evidence_present", False))
                 )
                 or any(
-                    isinstance(item, Mapping)
-                    and item.get("selected")
-                    and not item.get("invoked")
+                    isinstance(item, Mapping) and item.get("selected") and not item.get("invoked")
                     for item in (record.get("receipts") or [])
                 )
             )
@@ -348,7 +354,9 @@ class OutcomeMemoryManager:
             "status": "PASS",
             "source_experiences_count": len(records),
             "eligible_experiences_count": len(eligible_records),
-            "source_experiences": [str(record.get("task_id") or "") for record in records if record.get("task_id")],
+            "source_experiences": [
+                str(record.get("task_id") or "") for record in records if record.get("task_id")
+            ],
             "excluded_experiences": [
                 {
                     "task_id": str(record.get("task_id") or ""),
@@ -370,7 +378,10 @@ class OutcomeMemoryManager:
         }
         policy_path = state_root.dynamic_policy_path
         policy_path.parent.mkdir(parents=True, exist_ok=True)
-        policy_path.write_text(json.dumps(policy, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        policy_path.write_text(
+            json.dumps(policy, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return policy
 
     @classmethod
@@ -511,7 +522,11 @@ def _has_paired_uplift_evidence(evidence: Mapping[str, Any]) -> bool:
     on_val = pair.get("memory_on")
     on: Mapping[str, Any] = on_val if isinstance(on_val, Mapping) else {}
     fingerprint = str(pair.get("task_fingerprint") or pair.get("task_id") or "")
-    if not fingerprint or str(off.get("task_fingerprint") or off.get("task_id") or fingerprint) != fingerprint or str(on.get("task_fingerprint") or on.get("task_id") or fingerprint) != fingerprint:
+    if (
+        not fingerprint
+        or str(off.get("task_fingerprint") or off.get("task_id") or fingerprint) != fingerprint
+        or str(on.get("task_fingerprint") or on.get("task_id") or fingerprint) != fingerprint
+    ):
         return False
     off_status = str(off.get("verifier_status") or off.get("status") or "").lower()
     on_status = str(on.get("verifier_status") or on.get("status") or "").lower()
@@ -535,31 +550,36 @@ def build_episode_from_receipts(
     idempotency_key: str = "",
     terminal_outcome: str | None = None,
     retrieved_lesson_ids: Iterable[str] = (),
-        applied_lesson_ids: Iterable[str] = (),
-        qualification_evidence_present: bool | None = None,
+    applied_lesson_ids: Iterable[str] = (),
+    qualification_evidence_present: bool | None = None,
 ) -> EpisodeOutcomeRecord:
     solved = all(
         getattr(r, "gate_passed", False) for r in (receipts or []) if hasattr(r, "gate_passed")
     )
     trust_mismatch = any(
-        not getattr(r, "evidence_alignment", True) for r in (receipts or []) if hasattr(r, "evidence_alignment")
+        not getattr(r, "evidence_alignment", True)
+        for r in (receipts or [])
+        if hasattr(r, "evidence_alignment")
     )
     wall_duration_sec = 0.0
     total_tokens_used = 0
-    for r in (receipts or []):
+    for r in receipts or []:
         tel = getattr(r, "telemetries", None) or {}
         wall_duration_sec = max(wall_duration_sec, float(tel.get("wall_time_ms", 0) or 0) / 1000.0)
         total_tokens_used += int(tel.get("token_usage", 0) or 0)
     receipt_dicts: list[dict[str, Any]] = []
-    for r in (receipts or []):
+    for r in receipts or []:
         if hasattr(r, "to_dict") and callable(r.to_dict):
             d = r.to_dict()
             receipt_dicts.append(dict(d) if isinstance(d, Mapping) else {"data": str(d)})
         elif hasattr(r, "__dataclass_fields__"):
             import dataclasses
+
             receipt_dicts.append(dataclasses.asdict(r))
         else:
-            receipt_dicts.append({"capability_name": getattr(r, "capability_name", str(type(r).__name__))})
+            receipt_dicts.append(
+                {"capability_name": getattr(r, "capability_name", str(type(r).__name__))}
+            )
     return EpisodeOutcomeRecord.from_task(
         task_id=task_id,
         task_type=task_type,
@@ -575,7 +595,11 @@ def build_episode_from_receipts(
         terminal_outcome=terminal_outcome,
         retrieved_lesson_ids=retrieved_lesson_ids,
         applied_lesson_ids=applied_lesson_ids,
-        qualification_evidence_present=(bool(receipt_dicts) if qualification_evidence_present is None else bool(qualification_evidence_present)),
+        qualification_evidence_present=(
+            bool(receipt_dicts)
+            if qualification_evidence_present is None
+            else bool(qualification_evidence_present)
+        ),
     )
 
 

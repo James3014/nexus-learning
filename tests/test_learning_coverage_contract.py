@@ -112,11 +112,13 @@ def test_all_boolean_values_require_bound_evidence_not_fabricated_truth(fabricat
 def test_observed_wfps_requires_matching_lifecycle_evidence_and_receipt_kinds():
     capability = sorted(CAPABILITY_TAXONOMY)[0]
     with pytest.raises(CoverageContractError, match="evidence level"):
-        build_coverage_contract({
-            capability: {
-                "evidence_levels": {level: "observed" for level in "WFPS"},
+        build_coverage_contract(
+            {
+                capability: {
+                    "evidence_levels": {level: "observed" for level in "WFPS"},
+                }
             }
-        })
+        )
 
 
 def test_legal_looking_nonexistent_hash_is_not_source_authority():

@@ -165,7 +165,25 @@ def project_learning_entries(entries: Iterable[Mapping[str, Any]]) -> list[dict[
             current["episode_ids"].append(str(raw["episode_id"]))
         if raw.get("idempotency_key") and raw["idempotency_key"] not in current["idempotency_keys"]:
             current["idempotency_keys"].append(str(raw["idempotency_key"]))
-        for field in ("task_id", "classification", "summary", "action", "status", "reason", "topic", "capability_name", "outcome", "gate_passed", "provenance", "receipt_id", "source", "producer", "terminal_evidence", "stages", "qualification_status"):
+        for field in (
+            "task_id",
+            "classification",
+            "summary",
+            "action",
+            "status",
+            "reason",
+            "topic",
+            "capability_name",
+            "outcome",
+            "gate_passed",
+            "provenance",
+            "receipt_id",
+            "source",
+            "producer",
+            "terminal_evidence",
+            "stages",
+            "qualification_status",
+        ):
             if field in raw and field not in current:
                 current[field] = raw[field]
         current.setdefault("source", _source(raw))
@@ -189,13 +207,14 @@ def project_learning_entries(entries: Iterable[Mapping[str, Any]]) -> list[dict[
         else:
             row["validity_state"] = "active" if episode_ids else "unversioned"
         row["invalidation_evidence"] = [
-            {"episode_id": episode_id, **validity[episode_id]}
-            for episode_id in invalidated_ids
+            {"episode_id": episode_id, **validity[episode_id]} for episode_id in invalidated_ids
         ]
     return list(grouped.values())
 
 
-def write_learning_projection(entries: Iterable[Mapping[str, Any]], output_path: Path) -> dict[str, Any]:
+def write_learning_projection(
+    entries: Iterable[Mapping[str, Any]], output_path: Path
+) -> dict[str, Any]:
     """Atomically replace a projection file; never rewrites raw input."""
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -251,9 +270,20 @@ def _evidence_refs(entry: Mapping[str, Any]) -> list[str]:
         refs = [refs]
     evidence = entry.get("terminal_evidence")
     if isinstance(evidence, Mapping):
-        refs = list(refs) + [evidence.get("receipt"), evidence.get("verifier"), evidence.get("receipt_id"), evidence.get("provenance")]
+        refs = list(refs) + [
+            evidence.get("receipt"),
+            evidence.get("verifier"),
+            evidence.get("receipt_id"),
+            evidence.get("provenance"),
+        ]
     refs = list(refs) + [entry.get("receipt_id"), entry.get("provenance")]
-    return sorted({str(item) for item in refs if item and str(item).lower() not in {"receipt:pending", "pending"}})
+    return sorted(
+        {
+            str(item)
+            for item in refs
+            if item and str(item).lower() not in {"receipt:pending", "pending"}
+        }
+    )
 
 
 def _has_terminal_evidence(entry: Mapping[str, Any]) -> bool:
@@ -263,8 +293,15 @@ def _has_terminal_evidence(entry: Mapping[str, Any]) -> bool:
     receipt = _norm(evidence.get("receipt") or evidence.get("receipt_id"))
     verifier = _norm(evidence.get("verifier"))
     verifier_reference = verifier and verifier not in {
-        "fail", "failed", "pass", "passed", "success", "succeeded",
-        "missing", "unverified", "unknown",
+        "fail",
+        "failed",
+        "pass",
+        "passed",
+        "success",
+        "succeeded",
+        "missing",
+        "unverified",
+        "unknown",
     }
     return bool(
         (receipt and receipt not in {"receipt:pending", "pending"})
@@ -276,7 +313,9 @@ def _has_terminal_evidence(entry: Mapping[str, Any]) -> bool:
 
 
 def _source(entry: Mapping[str, Any]) -> str:
-    explicit = str(entry.get("source") or entry.get("producer") or entry.get("source_schema") or "").lower()
+    explicit = str(
+        entry.get("source") or entry.get("producer") or entry.get("source_schema") or ""
+    ).lower()
     if explicit:
         return explicit
     if any(key in entry for key in ("findings_card_id", "classification", "lesson_id")):

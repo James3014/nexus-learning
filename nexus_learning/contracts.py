@@ -94,10 +94,15 @@ class CapabilityLifecycle:
 
     @property
     def funnel_complete(self) -> bool:
-        return bool(self.selected and self.invoked and self.evidence and self.outcome and self.gate_passed)
+        return bool(
+            self.selected and self.invoked and self.evidence and self.outcome and self.gate_passed
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self) | {"evidence_refs": list(self.evidence_refs), "funnel_complete": self.funnel_complete}
+        return asdict(self) | {
+            "evidence_refs": list(self.evidence_refs),
+            "funnel_complete": self.funnel_complete,
+        }
 
 
 @dataclass(frozen=True)
@@ -267,18 +272,27 @@ def build_nexus_learning_episode(
     applied = sorted({str(item) for item in applied_lesson_ids if str(item)} & set(retrieved))
     verifier_status = str(evidence.get("verifier_status") or "").strip().lower()
     has_outcome_evidence = bool(evidence) and bool(
-        evidence.get("verifier") or evidence.get("receipt") or evidence.get("paired_verifier")
+        evidence.get("verifier")
+        or evidence.get("receipt")
+        or evidence.get("paired_verifier")
         or (verifier_status and verifier_status not in {"missing", "unverified", "unknown"})
         # A generic status is not verifier evidence; producers must identify
         # the verifier/receipt that measured the terminal outcome.
     )
     qual = dict(qualification or {})
     qualified = bool(
-        has_outcome_evidence and qual.get("repeatability") and qual.get("prevention_rule")
+        has_outcome_evidence
+        and qual.get("repeatability")
+        and qual.get("prevention_rule")
         and qual.get("authority_qualification")
     )
     outcome_measured = has_outcome_evidence and str(terminal_outcome).upper() in {
-        "SUCCEEDED", "SUCCESS", "FAILED", "CANCELLED", "BLOCKED", "REJECTED"
+        "SUCCEEDED",
+        "SUCCESS",
+        "FAILED",
+        "CANCELLED",
+        "BLOCKED",
+        "REJECTED",
     }
     stages = {
         "recorded": bool(learning_write_succeeded),
@@ -314,7 +328,16 @@ def build_nexus_learning_episode(
 
 
 def validate_nexus_learning_episode(episode: dict[str, Any]) -> None:
-    required = ("schema", "source_schema", "episode_id", "idempotency_key", "task_id", "producer", "terminal_evidence", "stages")
+    required = (
+        "schema",
+        "source_schema",
+        "episode_id",
+        "idempotency_key",
+        "task_id",
+        "producer",
+        "terminal_evidence",
+        "stages",
+    )
     missing = [name for name in required if name not in episode]
     if missing:
         raise ValueError(f"NEXUS_LEARNING_EPISODE_INCOMPLETE:{','.join(missing)}")
@@ -359,7 +382,12 @@ def paired_memory_uplift_observed(evidence: Mapping[str, Any]) -> bool:
         return False
     off_status = str(off.get("verifier_status") or off.get("status") or "").lower()
     on_status = str(on.get("verifier_status") or on.get("status") or "").lower()
-    if off_status not in {"failed", "fail", "blocked", "rejected"} or on_status not in {"passed", "pass", "success", "succeeded"}:
+    if off_status not in {"failed", "fail", "blocked", "rejected"} or on_status not in {
+        "passed",
+        "pass",
+        "success",
+        "succeeded",
+    }:
         return False
     return bool(
         (off.get("artifact") or off.get("artifact_ref") or off.get("receipt"))
@@ -369,7 +397,9 @@ def paired_memory_uplift_observed(evidence: Mapping[str, Any]) -> bool:
 
 def canonical_recommendation_identity(payload: dict[str, Any]) -> tuple[str, str]:
     """Compute content-addressed idempotency key and recommendation_id."""
-    clean_payload = {k: v for k, v in payload.items() if k not in {"recommendation_id", "recommendation_hash"}}
+    clean_payload = {
+        k: v for k, v in payload.items() if k not in {"recommendation_id", "recommendation_hash"}
+    }
     canonical_repr = json.dumps(clean_payload, sort_keys=True, separators=(",", ":"))
     rec_hash = hashlib.sha256(canonical_repr.encode("utf-8")).hexdigest()
     rec_id = f"lrec:{rec_hash[:24]}"
@@ -401,7 +431,10 @@ def build_learning_policy_recommendation(
         raise ValueError("RECOMMENDATION_MISSING_SOURCE_EPISODES")
     for ep in source_episodes:
         validate_nexus_learning_episode(ep)
-        if ep.get("lineage_status") == HISTORICAL_UNKNOWN or ep.get("episode_id") == HISTORICAL_UNKNOWN:
+        if (
+            ep.get("lineage_status") == HISTORICAL_UNKNOWN
+            or ep.get("episode_id") == HISTORICAL_UNKNOWN
+        ):
             raise ValueError("RECOMMENDATION_HISTORICAL_UNKNOWN_PROVENANCE_FORBIDDEN")
 
     episode_ids = [str(ep["episode_id"]) for ep in source_episodes]
@@ -415,7 +448,11 @@ def build_learning_policy_recommendation(
         raise ValueError("RECOMMENDATION_PAIRED_UPLIFT_NOT_OBSERVED")
 
     # Scope validation: Scope must follow evidence and not claim global authority
-    if applicable_scope.get("universal_learning_claim") or applicable_scope.get("all_models") or applicable_scope.get("all_tasks"):
+    if (
+        applicable_scope.get("universal_learning_claim")
+        or applicable_scope.get("all_models")
+        or applicable_scope.get("all_tasks")
+    ):
         raise ValueError("RECOMMENDATION_OVERBROAD_SCOPE_FORBIDDEN")
 
     payload: dict[str, Any] = {
@@ -459,10 +496,23 @@ def validate_learning_policy_recommendation(recommendation: dict[str, Any]) -> N
         raise ValueError("RECOMMENDATION_SCHEMA_INVALID")
 
     required = (
-        "schema", "recommendation_id", "recommendation_hash", "source_episode_ids",
-        "source_evidence_refs", "source_revision", "runtime_identity", "contract_revision",
-        "task_fingerprint", "off_arm", "on_arm", "observed_effect", "applicable_scope",
-        "recommended_policy_delta", "current_policy", "rollback_target", "claim_ceiling",
+        "schema",
+        "recommendation_id",
+        "recommendation_hash",
+        "source_episode_ids",
+        "source_evidence_refs",
+        "source_revision",
+        "runtime_identity",
+        "contract_revision",
+        "task_fingerprint",
+        "off_arm",
+        "on_arm",
+        "observed_effect",
+        "applicable_scope",
+        "recommended_policy_delta",
+        "current_policy",
+        "rollback_target",
+        "claim_ceiling",
         "status",
     )
     missing = [k for k in required if k not in recommendation]
@@ -477,15 +527,32 @@ def validate_learning_policy_recommendation(recommendation: dict[str, Any]) -> N
         raise ValueError("RECOMMENDATION_CONTENT_ADDRESS_MISMATCH")
 
     # Authority and scope invariants
-    if recommendation.get("direct_mutation_allowed") or recommendation.get("route_mutation_allowed") or recommendation.get("planner_mutation_allowed"):
+    if (
+        recommendation.get("direct_mutation_allowed")
+        or recommendation.get("route_mutation_allowed")
+        or recommendation.get("planner_mutation_allowed")
+    ):
         raise ValueError("RECOMMENDATION_CANNOT_AUTHORIZE_MUTATION")
 
     delta = recommendation.get("recommended_policy_delta", {})
-    if any(k in delta for k in ("CapabilityPlanner", "route_authority", "workforce_admission", "active_route_override")):
+    if any(
+        k in delta
+        for k in (
+            "CapabilityPlanner",
+            "route_authority",
+            "workforce_admission",
+            "active_route_override",
+        )
+    ):
         raise ValueError("RECOMMENDATION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
 
     scope = recommendation.get("applicable_scope", {})
-    if not scope or scope.get("all_tasks") or scope.get("all_models") or scope.get("universal_learning_claim"):
+    if (
+        not scope
+        or scope.get("all_tasks")
+        or scope.get("all_models")
+        or scope.get("universal_learning_claim")
+    ):
         raise ValueError("RECOMMENDATION_SCOPE_OVERBROAD")
 
     if not recommendation.get("rollback_target"):
@@ -503,7 +570,9 @@ def validate_learning_policy_recommendation(recommendation: dict[str, Any]) -> N
 
 def canonical_validation_identity(payload: dict[str, Any]) -> tuple[str, str]:
     """Compute content-addressed idempotency key and validation_id."""
-    clean_payload = {k: v for k, v in payload.items() if k not in {"validation_id", "validation_hash"}}
+    clean_payload = {
+        k: v for k, v in payload.items() if k not in {"validation_id", "validation_hash"}
+    }
     canonical_repr = json.dumps(clean_payload, sort_keys=True, separators=(",", ":"))
     val_hash = hashlib.sha256(canonical_repr.encode("utf-8")).hexdigest()
     val_id = f"lval:{val_hash[:24]}"
@@ -542,7 +611,9 @@ def evaluate_learning_policy_recommendation(
 
     if runtime_id != current_runtime_identity.strip():
         fresh = False
-        hostile_probes["runtime_identity_freshness"] = f"MISMATCH:{runtime_id}!={current_runtime_identity}"
+        hostile_probes["runtime_identity_freshness"] = (
+            f"MISMATCH:{runtime_id}!={current_runtime_identity}"
+        )
         blockers.append("runtime_identity_mismatch")
     else:
         hostile_probes["runtime_identity_freshness"] = "PASS"
@@ -550,7 +621,9 @@ def evaluate_learning_policy_recommendation(
     # 3. Causal & Evidence Sufficiency Check
     evidence_refs = recommendation.get("source_evidence_refs") or []
     has_retrieval = any("retrieval_receipt" in str(r) or "receipt" in str(r) for r in evidence_refs)
-    has_consumption = any("consumption" in str(r) or "ollama" in str(r) or "metrics" in str(r) for r in evidence_refs)
+    has_consumption = any(
+        "consumption" in str(r) or "ollama" in str(r) or "metrics" in str(r) for r in evidence_refs
+    )
     if not evidence_refs or not has_retrieval:
         blockers.append("missing_retrieval_receipt")
         hostile_probes["retrieval_receipt"] = "FAIL:missing_retrieval_receipt"
@@ -592,7 +665,11 @@ def evaluate_learning_policy_recommendation(
 
     # Disposition Determination
     if blockers:
-        disposition = "REJECTED_RECOMMENDATION" if any("violates" in b or "tamper" in b or "invalid" in b for b in blockers) else "INSUFFICIENT_EVIDENCE"
+        disposition = (
+            "REJECTED_RECOMMENDATION"
+            if any("violates" in b or "tamper" in b or "invalid" in b for b in blockers)
+            else "INSUFFICIENT_EVIDENCE"
+        )
     else:
         disposition = "VALIDATED_FOR_ADOPTION_CONSIDERATION"
 
@@ -653,11 +730,16 @@ def build_learning_policy_adoption(
 
     rec_id = recommendation.get("recommendation_id")
     rec_hash = recommendation.get("recommendation_hash")
-    if validation.get("recommendation_id") != rec_id or validation.get("recommendation_hash") != rec_hash:
+    if (
+        validation.get("recommendation_id") != rec_id
+        or validation.get("recommendation_hash") != rec_hash
+    ):
         raise ValueError("ADOPTION_RECOMMENDATION_VALIDATION_MISMATCH")
 
     # Recheck validation hash
-    val_clean = {k: v for k, v in validation.items() if k not in {"validation_id", "validation_hash"}}
+    val_clean = {
+        k: v for k, v in validation.items() if k not in {"validation_id", "validation_hash"}
+    }
     val_canonical = json.dumps(val_clean, sort_keys=True, separators=(",", ":"))
     computed_val_hash = hashlib.sha256(val_canonical.encode("utf-8")).hexdigest()
     if validation.get("validation_hash") != computed_val_hash:
@@ -665,13 +747,19 @@ def build_learning_policy_adoption(
 
     # Scope confinement: Must not exceed recommendation scope
     rec_scope = recommendation.get("applicable_scope", {})
-    if adopted_scope.get("universal_learning_claim") or adopted_scope.get("all_models") or adopted_scope.get("all_tasks"):
+    if (
+        adopted_scope.get("universal_learning_claim")
+        or adopted_scope.get("all_models")
+        or adopted_scope.get("all_tasks")
+    ):
         raise ValueError("ADOPTION_SCOPE_OVERBROAD")
     if str(adopted_scope.get("task_family") or "") != str(rec_scope.get("task_family") or ""):
         raise ValueError("ADOPTION_SCOPE_TASK_FAMILY_MISMATCH")
     if str(adopted_scope.get("model_name") or "") != str(rec_scope.get("model_name") or ""):
         raise ValueError("ADOPTION_SCOPE_MODEL_MISMATCH")
-    if str(adopted_scope.get("runtime_identity") or "") != str(rec_scope.get("runtime_identity") or ""):
+    if str(adopted_scope.get("runtime_identity") or "") != str(
+        rec_scope.get("runtime_identity") or ""
+    ):
         raise ValueError("ADOPTION_SCOPE_RUNTIME_MISMATCH")
 
     # Recheck source revision freshness
@@ -679,11 +767,23 @@ def build_learning_policy_adoption(
         raise ValueError("ADOPTION_SOURCE_REVISION_STALE")
 
     # Rollback readiness
-    if not rollback_target or not isinstance(rollback_target, dict) or not rollback_target.get("target_state"):
+    if (
+        not rollback_target
+        or not isinstance(rollback_target, dict)
+        or not rollback_target.get("target_state")
+    ):
         raise ValueError("ADOPTION_MISSING_ROLLBACK_TARGET")
 
     # Authority invariant: No direct planner route override allowed
-    if any(k in target_policy_delta for k in ("CapabilityPlanner", "route_authority", "workforce_admission", "active_route_override")):
+    if any(
+        k in target_policy_delta
+        for k in (
+            "CapabilityPlanner",
+            "route_authority",
+            "workforce_admission",
+            "active_route_override",
+        )
+    ):
         raise ValueError("ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
 
     prev_canonical = json.dumps(previous_policy, sort_keys=True, separators=(",", ":"))
@@ -727,11 +827,24 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
         raise ValueError("ADOPTION_SCHEMA_INVALID")
 
     required = (
-        "schema", "adoption_id", "adoption_hash", "owner_authority_reference",
-        "recommendation_id", "recommendation_hash", "validation_id", "validation_hash",
-        "source_revision", "adopted_scope", "target_policy_delta", "target_policy_hash",
-        "previous_policy", "previous_policy_hash", "rollback_target", "adoption_status",
-        "claim_ceiling", "route_truth_source",
+        "schema",
+        "adoption_id",
+        "adoption_hash",
+        "owner_authority_reference",
+        "recommendation_id",
+        "recommendation_hash",
+        "validation_id",
+        "validation_hash",
+        "source_revision",
+        "adopted_scope",
+        "target_policy_delta",
+        "target_policy_hash",
+        "previous_policy",
+        "previous_policy_hash",
+        "rollback_target",
+        "adoption_status",
+        "claim_ceiling",
+        "route_truth_source",
     )
     missing = [k for k in required if k not in adoption]
     if missing:
@@ -756,7 +869,12 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
 
     # Scope check
     scope = adoption.get("adopted_scope", {})
-    if not scope or scope.get("all_tasks") or scope.get("all_models") or scope.get("universal_learning_claim"):
+    if (
+        not scope
+        or scope.get("all_tasks")
+        or scope.get("all_models")
+        or scope.get("universal_learning_claim")
+    ):
         raise ValueError("ADOPTION_SCOPE_OVERBROAD")
 
     # Rollback check
@@ -797,7 +915,9 @@ def build_learning_policy_rollback(
         "recommendation_hash": adoption.get("recommendation_hash"),
         "previous_policy_hash": adoption.get("target_policy_hash"),
         "rolled_back_policy": dict(target_state),
-        "rolled_back_policy_hash": hashlib.sha256(json.dumps(target_state, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+        "rolled_back_policy_hash": hashlib.sha256(
+            json.dumps(target_state, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
         "rollback_reason": str(reason),
         "triggered_by": str(triggered_by),
         "rollback_status": "ROLLED_BACK",
@@ -818,10 +938,19 @@ def validate_learning_policy_rollback(rollback: dict[str, Any]) -> None:
         raise ValueError("ROLLBACK_SCHEMA_INVALID")
 
     required = (
-        "schema", "rollback_id", "rollback_hash", "adoption_id", "adoption_hash",
-        "recommendation_id", "recommendation_hash", "previous_policy_hash",
-        "rolled_back_policy", "rolled_back_policy_hash", "rollback_reason",
-        "rollback_status", "route_truth_source",
+        "schema",
+        "rollback_id",
+        "rollback_hash",
+        "adoption_id",
+        "adoption_hash",
+        "recommendation_id",
+        "recommendation_hash",
+        "previous_policy_hash",
+        "rolled_back_policy",
+        "rolled_back_policy_hash",
+        "rollback_reason",
+        "rollback_status",
+        "route_truth_source",
     )
     missing = [k for k in required if k not in rollback]
     if missing:
@@ -916,9 +1045,17 @@ def project_adoption_into_planner_budget(
 
 def validate_runtime_learning_closure(episode: dict[str, Any]) -> None:
     required = (
-        "schema", "task_id", "attempt_id", "action_id", "phase_receipts",
-        "outcome", "terminal_evidence", "auto_replay_allowed", "lesson_disposition",
-        "learning_write_succeeded", "primary_task_success",
+        "schema",
+        "task_id",
+        "attempt_id",
+        "action_id",
+        "phase_receipts",
+        "outcome",
+        "terminal_evidence",
+        "auto_replay_allowed",
+        "lesson_disposition",
+        "learning_write_succeeded",
+        "primary_task_success",
     )
     missing = [item for item in required if item not in episode]
     if missing:
@@ -929,12 +1066,22 @@ def validate_runtime_learning_closure(episode: dict[str, Any]) -> None:
         raise ValueError("RUNTIME_LEARNING_AUTO_REPLAY_FORBIDDEN")
     if episode.get("uncertain_mutation") and episode.get("auto_replay_allowed"):
         raise ValueError("RUNTIME_LEARNING_UNCERTAIN_REPLAY_FORBIDDEN")
-    if str(episode.get("outcome") or "").upper() in {"FAILED", "BLOCKED", "REJECTED"} and episode.get("lesson_disposition") == "graduated":
+    if (
+        str(episode.get("outcome") or "").upper() in {"FAILED", "BLOCKED", "REJECTED"}
+        and episode.get("lesson_disposition") == "graduated"
+    ):
         raise ValueError("RUNTIME_LEARNING_FAILED_ATTEMPT_CANNOT_GRADUATE")
     if episode.get("lesson_disposition") == "graduated":
         qualification = episode.get("qualification") or {}
-        required_qualification = ("terminal_evidence", "repeatability", "prevention_rule", "authority_qualification")
-        if not episode.get("terminal_evidence") or any(not qualification.get(field) for field in required_qualification[1:]):
+        required_qualification = (
+            "terminal_evidence",
+            "repeatability",
+            "prevention_rule",
+            "authority_qualification",
+        )
+        if not episode.get("terminal_evidence") or any(
+            not qualification.get(field) for field in required_qualification[1:]
+        ):
             raise ValueError("RUNTIME_LEARNING_QUALIFICATION_INCOMPLETE")
     if episode.get("primary_task_success") and not episode.get("learning_write_succeeded"):
         raise ValueError("RUNTIME_LEARNING_WRITE_FAILURE_CANNOT_REPORT_SUCCESS")
@@ -968,8 +1115,12 @@ def learning_experience_from_dict(payload: dict[str, Any]) -> LearningExperience
         route_decision_ref=str(payload.get("route_decision_ref") or ""),
         s2t_trace_refs=tuple(str(ref) for ref in payload.get("s2t_trace_refs", []) or []),
         learning_steward_decision=str(payload.get("learning_steward_decision") or "shadow"),
-        nexus_policy_targets=tuple(str(item) for item in payload.get("nexus_policy_targets", []) or ()),
-        model_training_targets=tuple(str(item) for item in payload.get("model_training_targets", []) or ()),
+        nexus_policy_targets=tuple(
+            str(item) for item in payload.get("nexus_policy_targets", []) or ()
+        ),
+        model_training_targets=tuple(
+            str(item) for item in payload.get("model_training_targets", []) or ()
+        ),
         promotion_status=str(payload.get("promotion_status") or "shadow"),
         schema_version=str(payload.get("schema_version") or LEARNING_EXPERIENCE_SCHEMA_VERSION),
     )
@@ -987,10 +1138,20 @@ def build_learning_experience(
     usage = usage_trace or {}
     receipts = capability_receipts or usage.get("capability_receipts", []) or []
     phase_trace = usage.get("phase_trace", {}) if isinstance(usage.get("phase_trace"), dict) else {}
-    observed = [phase for phase in PHASE_CHAIN if phase in phase_trace or phase in usage.get("phase_wall_sec", {})]
-    capabilities = tuple(_lifecycle_from_receipt(item) for item in receipts if isinstance(item, dict))
+    observed = [
+        phase
+        for phase in PHASE_CHAIN
+        if phase in phase_trace or phase in usage.get("phase_wall_sec", {})
+    ]
+    capabilities = tuple(
+        _lifecycle_from_receipt(item) for item in receipts if isinstance(item, dict)
+    )
     gate_chain = _gate_chain(usage)
-    outcome = "verified_success" if all(gate_chain.get(key) == "pass" for key in ("artifact", "claim", "delivery")) else "unverified"
+    outcome = (
+        "verified_success"
+        if all(gate_chain.get(key) == "pass" for key in ("artifact", "claim", "delivery"))
+        else "unverified"
+    )
     s2t = usage.get("s2t", {}) if isinstance(usage.get("s2t"), dict) else {}
     s2t_refs = tuple(str(ref) for ref in [s2t.get("trace_path", "")] if str(ref).strip())
     experience_id = f"exp:{task_id or 'unknown'}:{abs(hash((task_id, len(capabilities), outcome))) % 10_000_000}"
@@ -1017,7 +1178,11 @@ def build_learning_experience(
 
 def project_nexus_policy(experience: LearningExperience) -> dict[str, Any]:
     complete = [item.capability for item in experience.capability_lifecycle if item.funnel_complete]
-    unnecessary = [item.capability for item in experience.capability_lifecycle if item.selected and not item.invoked]
+    unnecessary = [
+        item.capability
+        for item in experience.capability_lifecycle
+        if item.selected and not item.invoked
+    ]
     escalation = build_escalation_recommendations(experience)
     return {
         "schema_version": "nexus_policy_learning_projection.v1",
@@ -1026,12 +1191,16 @@ def project_nexus_policy(experience: LearningExperience) -> dict[str, Any]:
         "route_weight_updates": complete,
         "capability_penalties": unnecessary,
         "escalation_recommendations": escalation,
-        "s2t_prior_eligible": bool(experience.s2t_trace_refs and experience.outcome == "verified_success"),
+        "s2t_prior_eligible": bool(
+            experience.s2t_trace_refs and experience.outcome == "verified_success"
+        ),
     }
 
 
 def project_model_training(experience: LearningExperience) -> dict[str, Any]:
-    eligible = experience.outcome == "verified_success" and experience.gate_chain.get("claim") == "pass"
+    eligible = (
+        experience.outcome == "verified_success" and experience.gate_chain.get("claim") == "pass"
+    )
     return {
         "schema_version": "nexus_model_training_projection.v1",
         "experience_id": experience.experience_id,
@@ -1041,7 +1210,9 @@ def project_model_training(experience: LearningExperience) -> dict[str, Any]:
     }
 
 
-def apply_autodata_quality_gate(projection: dict[str, Any], quality_row: dict[str, Any] | None) -> dict[str, Any]:
+def apply_autodata_quality_gate(
+    projection: dict[str, Any], quality_row: dict[str, Any] | None
+) -> dict[str, Any]:
     """Fail closed model export when trajectory quality is not training-grade."""
     gated = dict(projection)
     reasons: list[str] = []
@@ -1066,7 +1237,9 @@ def apply_autodata_quality_gate(projection: dict[str, Any], quality_row: dict[st
         reasons.append("leakage_risk")
     if bool(quality_row.get("reward_hacking_risk", False)):
         reasons.append("reward_hacking_risk")
-    quality_reasons = [str(reason) for reason in quality_row.get("reasons", []) or [] if str(reason).strip()]
+    quality_reasons = [
+        str(reason) for reason in quality_row.get("reasons", []) or [] if str(reason).strip()
+    ]
     if any("leakage" in reason for reason in quality_reasons):
         reasons.append("leakage_risk")
     if any("reward_hacking" in reason for reason in quality_reasons):
@@ -1079,10 +1252,15 @@ def apply_autodata_quality_gate(projection: dict[str, Any], quality_row: dict[st
         "attached": True,
         "status": "pass" if eligible and not reasons else "fail",
         "reasons": quality_reasons,
-        "trajectory_steps": int(quality_row.get("trajectory_steps", quality_row.get("trajectory_step_count", 0)) or 0),
+        "trajectory_steps": int(
+            quality_row.get("trajectory_steps", quality_row.get("trajectory_step_count", 0)) or 0
+        ),
         "information_density": float(quality_row.get("information_density", 0.0) or 0.0),
     }
-    gated["model_training_gate"] = {"status": "pass" if gated["training_eligible"] else "fail", "reasons": sorted(set(reasons))}
+    gated["model_training_gate"] = {
+        "status": "pass" if gated["training_eligible"] else "fail",
+        "reasons": sorted(set(reasons)),
+    }
     return gated
 
 
@@ -1107,7 +1285,10 @@ def build_escalation_recommendations(experience: LearningExperience) -> list[dic
                 "reason": "autoreason_selected_without_evidence",
             }
         )
-    if experience.gate_chain.get("delivery") != "pass" and experience.gate_chain.get("artifact") == "pass":
+    if (
+        experience.gate_chain.get("delivery") != "pass"
+        and experience.gate_chain.get("artifact") == "pass"
+    ):
         recommendations.append(
             {
                 "from": "artifact_gate",
@@ -1143,34 +1324,59 @@ def build_promoted_learning_policy(experiences: list[LearningExperience]) -> dic
     }
 
 
-def save_promoted_learning_policy(path: Path, experiences: list[LearningExperience]) -> dict[str, Any]:
+def save_promoted_learning_policy(
+    path: Path, experiences: list[LearningExperience]
+) -> dict[str, Any]:
     current = build_promoted_learning_policy(experiences)
     prior = load_promoted_learning_policy(path)
-    merged_roi = _merge_capability_roi(prior.get("capability_roi", {}) if isinstance(prior, dict) else {}, current.get("capability_roi", {}))
+    merged_roi = _merge_capability_roi(
+        prior.get("capability_roi", {}) if isinstance(prior, dict) else {},
+        current.get("capability_roi", {}),
+    )
     penalty_candidates = _derive_penalty_candidates(merged_roi)
     policy = {
         "schema_version": "nexus_promoted_learning_policy.v1",
         "source_experiences": sorted(
-            set(str(item) for item in (prior.get("source_experiences", []) if isinstance(prior, dict) else []) or [])
+            set(
+                str(item)
+                for item in (prior.get("source_experiences", []) if isinstance(prior, dict) else [])
+                or []
+            )
             | set(current.get("source_experiences", []) or [])
         ),
         "promoted_capabilities": sorted(
-            set(str(item) for item in (prior.get("promoted_capabilities", []) if isinstance(prior, dict) else []) or [])
+            set(
+                str(item)
+                for item in (
+                    prior.get("promoted_capabilities", []) if isinstance(prior, dict) else []
+                )
+                or []
+            )
             | set(current.get("promoted_capabilities", []) or [])
         ),
         "penalized_capabilities": sorted(
-            set(str(item) for item in (prior.get("penalized_capabilities", []) if isinstance(prior, dict) else []) or [])
+            set(
+                str(item)
+                for item in (
+                    prior.get("penalized_capabilities", []) if isinstance(prior, dict) else []
+                )
+                or []
+            )
             | set(current.get("penalized_capabilities", []) or [])
             | set(penalty_candidates)
         ),
-        "escalation_recommendations": list((prior.get("escalation_recommendations", []) if isinstance(prior, dict) else []) or [])
+        "escalation_recommendations": list(
+            (prior.get("escalation_recommendations", []) if isinstance(prior, dict) else []) or []
+        )
         + list(current.get("escalation_recommendations", []) or []),
         "capability_roi": merged_roi,
         "penalty_candidates": penalty_candidates,
         "enforce_penalties": bool(penalty_candidates),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return policy
 
 
@@ -1223,7 +1429,9 @@ def _gate_chain(usage: dict[str, Any]) -> dict[str, str]:
         "mempalace": status("mempalace"),
         "belief": status("belief"),
         "artifact": status("artifact"),
-        "claim": "pass" if caps.get("claim_verified") or caps.get("claim_gate_passed") else "not_run",
+        "claim": "pass"
+        if caps.get("claim_verified") or caps.get("claim_gate_passed")
+        else "not_run",
         "delivery": status("delivery"),
     }
 
@@ -1271,7 +1479,8 @@ def _merge_capability_roi(
             "invoked": int(base.get("invoked", 0) or 0) + int(now.get("invoked", 0) or 0),
             "evidence": int(base.get("evidence", 0) or 0) + int(now.get("evidence", 0) or 0),
             "outcome": int(base.get("outcome", 0) or 0) + int(now.get("outcome", 0) or 0),
-            "gate_passed": int(base.get("gate_passed", 0) or 0) + int(now.get("gate_passed", 0) or 0),
+            "gate_passed": int(base.get("gate_passed", 0) or 0)
+            + int(now.get("gate_passed", 0) or 0),
         }
     return merged
 

@@ -30,7 +30,9 @@ def test_no_runtime_or_planner_authority():
                         violations.append(f"{py_file}:{node.lineno}: import {alias.name}")
                     for kw in FORBIDDEN_KEYWORDS:
                         if kw.lower() in alias.name.lower():
-                            violations.append(f"{py_file}:{node.lineno}: import {alias.name} (matches {kw})")
+                            violations.append(
+                                f"{py_file}:{node.lineno}: import {alias.name} (matches {kw})"
+                            )
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     root = node.module.split(".")[0]
@@ -38,6 +40,11 @@ def test_no_runtime_or_planner_authority():
                         violations.append(f"{py_file}:{node.lineno}: from {node.module} import ...")
                     for kw in FORBIDDEN_KEYWORDS:
                         if kw.lower() in node.module.lower():
-                            violations.append(f"{py_file}:{node.lineno}: from {node.module} (matches {kw})")
+                            violations.append(
+                                f"{py_file}:{node.lineno}: from {node.module} (matches {kw})"
+                            )
 
-    assert not violations, "Found forbidden runtime/authority dependencies in nexus_learning:\n" + "\n".join(violations)
+    assert not violations, (
+        "Found forbidden runtime/authority dependencies in nexus_learning:\n"
+        + "\n".join(violations)
+    )

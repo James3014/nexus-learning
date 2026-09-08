@@ -12,7 +12,9 @@ def test_state_root_paths_structure(tmp_path: Path):
     assert root.memory_dir == tmp_path / ".nexus" / "memory"
     assert root.audit_dir == tmp_path / ".nexus" / "audit"
     assert root.outcome_history_path == tmp_path / ".nexus" / "memory" / "outcome_history.jsonl"
-    assert root.dynamic_policy_path == tmp_path / ".nexus" / "memory" / "dynamic_learning_policy.json"
+    assert (
+        root.dynamic_policy_path == tmp_path / ".nexus" / "memory" / "dynamic_learning_policy.json"
+    )
     assert root.learning_episodes_path == tmp_path / ".nexus" / "memory" / "learning_episodes.jsonl"
     assert root.retrieval_log_path == tmp_path / ".nexus" / "audit" / "retrieval_log.jsonl"
 
@@ -97,7 +99,9 @@ def test_different_project_roots_remain_isolated(tmp_path: Path):
 
 def test_missing_project_root_fails_closed_without_dev_fallback(monkeypatch):
     monkeypatch.delenv("NEXUS_LEARNING_STATE_ROOT", raising=False)
-    with pytest.raises(ValueError, match="Persistent Learning state requires an explicit project_root"):
+    with pytest.raises(
+        ValueError, match="Persistent Learning state requires an explicit project_root"
+    ):
         resolve_learning_state_root(None, allow_dev_cwd_fallback=False)
 
 

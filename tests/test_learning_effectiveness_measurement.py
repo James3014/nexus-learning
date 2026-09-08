@@ -72,18 +72,20 @@ def test_replay_is_order_independent_and_does_not_mutate_inputs():
 
 
 def test_missing_telemetry_is_not_fabricated_as_zero_or_success():
-    result = replay_scorecard([
-        row(
-            measured_elapsed_seconds=None,
-            intervention_events=None,
-            intervention_count=None,
-            missingness_reasons=[
-                "measured_elapsed_seconds:unreported",
-                "intervention_count:unreported",
-                "intervention_events:unreported",
-            ],
-        )
-    ])
+    result = replay_scorecard(
+        [
+            row(
+                measured_elapsed_seconds=None,
+                intervention_events=None,
+                intervention_count=None,
+                missingness_reasons=[
+                    "measured_elapsed_seconds:unreported",
+                    "intervention_count:unreported",
+                    "intervention_events:unreported",
+                ],
+            )
+        ]
+    )
     assert result["metrics"]["time_to_green"]["numerator"] is None
     assert result["metrics"]["intervention_rate"]["denominator"] == 0
     assert result["metrics"]["intervention_rate"]["missing"] == 1
@@ -167,9 +169,9 @@ def test_verifier_receipt_is_required_and_identity_evidence_types_are_strict():
     with pytest.raises(ReplayContractError):
         replay_scorecard([row(measured_elapsed_seconds=None)])
     with pytest.raises(ReplayContractError):
-        replay_scorecard([
-            row(measured_elapsed_seconds=None, missingness_reasons=["other_field:unreported"])
-        ])
+        replay_scorecard(
+            [row(measured_elapsed_seconds=None, missingness_reasons=["other_field:unreported"])]
+        )
     with pytest.raises(ReplayContractError):
         replay_scorecard([row(intervention_events=["manual"], intervention_count=0)])
     with pytest.raises(ReplayContractError):
@@ -306,9 +308,9 @@ def test_lesson_funnel_uses_stage_denominators_and_requires_attribution_subset()
         1,
     )
     with pytest.raises(ReplayContractError):
-        replay_scorecard([
-            row(retrieved_lesson_ids=["lesson-1"], applied_attributed_lesson_ids=["lesson-2"])
-        ])
+        replay_scorecard(
+            [row(retrieved_lesson_ids=["lesson-1"], applied_attributed_lesson_ids=["lesson-2"])]
+        )
 
 
 def test_every_metric_has_complete_denominator_contract():
@@ -578,57 +580,65 @@ def test_paired_true_missing_telemetry_artifact_and_receipt_remain_missing():
         memory_arm="memory_on",
     )
 
-    missing_elapsed = paired_memory_uplift([
-        off,
-        dict(
-            on,
-            measured_elapsed_seconds=None,
-            missingness_reasons=["measured_elapsed_seconds:unreported"],
-        ),
-    ])
+    missing_elapsed = paired_memory_uplift(
+        [
+            off,
+            dict(
+                on,
+                measured_elapsed_seconds=None,
+                missingness_reasons=["measured_elapsed_seconds:unreported"],
+            ),
+        ]
+    )
     assert missing_elapsed["missing"] == missing_elapsed["missing_telemetry"] == 1
     assert missing_elapsed["exclusions"] == ["fp-missing-pair:missing_telemetry"]
 
-    missing_intervention = paired_memory_uplift([
-        off,
-        dict(
-            on,
-            intervention_events=None,
-            intervention_count=None,
-            missingness_reasons=[
-                "intervention_events:unreported",
-                "intervention_count:unreported",
-            ],
-        ),
-    ])
+    missing_intervention = paired_memory_uplift(
+        [
+            off,
+            dict(
+                on,
+                intervention_events=None,
+                intervention_count=None,
+                missingness_reasons=[
+                    "intervention_events:unreported",
+                    "intervention_count:unreported",
+                ],
+            ),
+        ]
+    )
     assert missing_intervention["missing"] == missing_intervention["missing_telemetry"] == 1
     assert missing_intervention["exclusions"] == ["fp-missing-pair:missing_telemetry"]
 
-    missing_violation = paired_memory_uplift([
-        off,
-        dict(
-            on,
-            forbidden_strategy_violation_event=None,
-            missingness_reasons=["forbidden_strategy_violation_event:unreported"],
-        ),
-    ])
+    missing_violation = paired_memory_uplift(
+        [
+            off,
+            dict(
+                on,
+                forbidden_strategy_violation_event=None,
+                missingness_reasons=["forbidden_strategy_violation_event:unreported"],
+            ),
+        ]
+    )
     assert missing_violation["missing"] == missing_violation["missing_telemetry"] == 1
     assert missing_violation["exclusions"] == ["fp-missing-pair:missing_telemetry"]
 
-    missing_evidence = paired_memory_uplift([
-        off,
-        dict(
-            on,
-            verifier_artifact=None,
-            verifier_artifact_hash=None,
-            verifier_receipt=None,
-            missingness_reasons=[
-                "verifier_artifact:unreported",
-                "verifier_artifact_hash:unreported",
-                "verifier_receipt:unreported",
-            ],
-        ),
-    ])
+    missing_evidence = paired_memory_uplift(
+        [
+            off,
+            dict(
+                on,
+                verifier_artifact=None,
+                verifier_artifact_hash=None,
+                verifier_receipt=None,
+                missingness_reasons=[
+                    "verifier_artifact:unreported",
+                    "verifier_artifact_hash:unreported",
+                    "verifier_receipt:unreported",
+                ],
+            ),
+        ]
+    )
     assert missing_evidence["missing"] == missing_evidence["missing_telemetry"] == 1
     assert missing_evidence["exclusions"] == ["fp-missing-pair:missing_artifact_or_receipt"]
 
