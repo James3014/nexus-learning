@@ -32,6 +32,9 @@ from nexus_learning.contracts import (
     validate_nexus_learning_episode,
 )
 from nexus_learning.effectiveness_measurement import (
+    QUALITY_QUALIFIED_ECONOMICS_SCHEMA,
+    QualityWorkflowRow,
+    compare_workflows_at_required_quality,
     normalize_attempt_row,
     paired_memory_uplift,
     replay_scorecard,
@@ -113,6 +116,9 @@ __all__ = [
     "normalize_attempt_row",
     "paired_memory_uplift",
     "replay_scorecard",
+    "QUALITY_QUALIFIED_ECONOMICS_SCHEMA",
+    "QualityWorkflowRow",
+    "compare_workflows_at_required_quality",
     "OutcomeMemoryManager",
     "log_retrieval_audit",
     "AuditEntry",
