@@ -765,13 +765,17 @@ def _cost_comparable(
         "cost_telemetry_complete"
     ):
         return False
-    candidate = [cost.get(field) for field in COST_COMPARISON_FIELDS]
-    baseline = [baseline_cost.get(field) for field in COST_COMPARISON_FIELDS]
-    if any(value is None for value in candidate + baseline):
-        return False
-    return all(c <= b for c, b in zip(candidate, baseline)) and any(
-        c < b for c, b in zip(candidate, baseline)
-    )
+    strictly_better = False
+    for field in COST_COMPARISON_FIELDS:
+        candidate_value = cost.get(field)
+        baseline_value = baseline_cost.get(field)
+        if candidate_value is None or baseline_value is None:
+            return False
+        if candidate_value > baseline_value:
+            return False
+        if candidate_value < baseline_value:
+            strictly_better = True
+    return strictly_better
 
 
 def _quality_superior(
