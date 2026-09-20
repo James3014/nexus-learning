@@ -216,3 +216,34 @@ def test_recommendation_adoption_unchanged_for_existing_memory_path():
         current_runtime_identity="local_model_executor",
     )
     assert validation["validation_disposition"] == "VALIDATED_FOR_ADOPTION_CONSIDERATION"
+
+def test_policy_evidence_projection_has_specific_exclusion_reason():
+    exp = _verified_experience(LEARNING_POLICY_EVIDENCE_PURPOSE)
+    projection = project_model_training(exp)
+    assert projection["training_eligible"] is False
+    assert projection["targets"] == []
+    assert projection["exclusion_reason"] == "LEARNING_POLICY_EVIDENCE_TRAINING_FORBIDDEN"
+
+
+def test_quality_gate_clears_targets_from_inconsistent_forbidden_projection():
+    forged = {
+        "schema_version": "nexus_model_training_projection.v1",
+        "experience_id": "exp-forged",
+        "training_eligible": True,
+        "training_admission": TRAINING_ADMISSION_FORBIDDEN,
+        "exclusion_reason": "EVALUATION_ONLY_TRAINING_FORBIDDEN",
+        "targets": ["preference_pair", "reward_row"],
+        "source_trace_refs": [".nexus/reports/s2t/forged.jsonl"],
+    }
+    gated = apply_autodata_quality_gate(forged, _quality_row())
+    assert gated["training_eligible"] is False
+    assert gated["targets"] == []
+    assert "training_forbidden_by_data_purpose" in gated["model_training_gate"]["reasons"]
+
+
+def test_missing_quality_row_preserves_training_forbidden_reason():
+    exp = _verified_experience(EVALUATION_ONLY_PURPOSE)
+    gated = apply_autodata_quality_gate(project_model_training(exp), None)
+    assert gated["training_eligible"] is False
+    assert gated["targets"] == []
+    assert "training_forbidden_by_data_purpose" in gated["model_training_gate"]["reasons"]
