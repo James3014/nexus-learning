@@ -846,6 +846,7 @@ def compare_workflows_at_required_quality(
     required_quality_floor: float,
     critical_failure_ceiling: int,
     baseline_workflow: str = "",
+    baseline_workflow_revision: str = "",
 ) -> dict[str, Any]:
     """Compare workflows only after a required-quality gate has passed.
 
@@ -900,16 +901,24 @@ def compare_workflows_at_required_quality(
     if qualified:
         if baseline_workflow:
             candidates = [
-                body for body in qualified if body["workflow_identity"] == baseline_workflow
+                body
+                for body in qualified
+                if body["workflow_identity"] == baseline_workflow
+                and (
+                    not baseline_workflow_revision
+                    or body["workflow_revision"] == baseline_workflow_revision
+                )
             ]
-            if not candidates:
+            if len(candidates) != 1:
                 raise ReplayContractError(
-                    "baseline_workflow does not identify a quality-qualified workflow unit"
+                    "baseline_workflow must identify exactly one quality-qualified "
+                    "workflow+revision unit"
                 )
             baseline_body = candidates[0]
         else:
             baseline_body = qualified[0]
         baseline_workflow = baseline_body["workflow_identity"]
+        baseline_workflow_revision = baseline_body["workflow_revision"]
     for body in rows_out:
         if body["gate_status"] != "QUALITY_QUALIFIED":
             continue
@@ -926,7 +935,10 @@ def compare_workflows_at_required_quality(
         if baseline_body is None:
             body["dispositions"].append("NO_INCREMENTAL_VALUE")
             continue
-        if body["workflow_identity"] == baseline_workflow:
+        if (
+            body["workflow_identity"] == baseline_workflow
+            and body["workflow_revision"] == baseline_workflow_revision
+        ):
             body["dispositions"].append("NO_INCREMENTAL_VALUE")
             continue
         if _quality_superior(body["quality"], baseline_body["quality"]):
@@ -948,6 +960,7 @@ def compare_workflows_at_required_quality(
         "required_quality_floor": float(required_quality_floor),
         "critical_failure_ceiling": int(critical_failure_ceiling),
         "baseline_workflow": baseline_workflow,
+        "baseline_workflow_revision": baseline_workflow_revision,
         "rows": rows_out,
         "summary": {
             "workflow_count": len(rows_out),
