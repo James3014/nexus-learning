@@ -22,6 +22,14 @@ LEARNING_POLICY_VALIDATION_SCHEMA = "nexus.learning_policy_validation.v1"
 LEARNING_POLICY_ADOPTION_SCHEMA = "nexus.learning_policy_adoption.v1"
 LEARNING_POLICY_ROLLBACK_SCHEMA = "nexus.learning_policy_rollback.v1"
 HISTORICAL_UNKNOWN = "HISTORICAL_UNKNOWN"
+TRAINING_CANDIDATE_PURPOSE = "TRAINING_CANDIDATE"
+EVALUATION_ONLY_PURPOSE = "EVALUATION_ONLY"
+LEARNING_POLICY_EVIDENCE_PURPOSE = "LEARNING_POLICY_EVIDENCE"
+TRAINING_FORBIDDEN_PURPOSES = frozenset(
+    {EVALUATION_ONLY_PURPOSE, LEARNING_POLICY_EVIDENCE_PURPOSE}
+)
+TRAINING_ADMISSION_FORBIDDEN = "TRAINING_FORBIDDEN"
+TRAINING_ADMISSION_QUALITY_GATED = "QUALITY_GATED"
 RUNTIME_LEARNING_PHASE_CHAIN = ("S", "P", "D", "X", "R", "A", "C")
 PHASE_CHAIN = ("S", "P", "X", "D", "R", "A", "C")
 HIGH_COST_CAPABILITIES = {
@@ -127,6 +135,7 @@ class LearningExperience:
     nexus_policy_targets: tuple[str, ...] = ("route_weight", "capability_weight", "s2t_prior")
     model_training_targets: tuple[str, ...] = ("preference_pair", "reward_row")
     promotion_status: str = "shadow"
+    data_purpose: str = TRAINING_CANDIDATE_PURPOSE
     schema_version: str = LEARNING_EXPERIENCE_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -1159,6 +1168,23 @@ def validate_runtime_learning_closure(episode: dict[str, Any]) -> None:
         raise ValueError("RUNTIME_LEARNING_WRITE_FAILURE_CANNOT_REPORT_SUCCESS")
 
 
+def resolve_training_admission(data_purpose: str) -> str:
+    """Resolve a data purpose to a training admission decision (fail closed).
+
+    ``EVALUATION_ONLY`` and ``LEARNING_POLICY_EVIDENCE`` data is forbidden from
+    ever becoming labels, pseudo-labels, rewards, preference pairs, or
+    distillation/imitation/fine-tuning material.  Ordinary ``TRAINING_CANDIDATE``
+    data remains quality-gated.  Any unknown purpose is a hard failure rather
+    than a silent downgrade into trainable data.
+    """
+    purpose = str(data_purpose or TRAINING_CANDIDATE_PURPOSE).strip()
+    if purpose in TRAINING_FORBIDDEN_PURPOSES:
+        return TRAINING_ADMISSION_FORBIDDEN
+    if purpose == TRAINING_CANDIDATE_PURPOSE:
+        return TRAINING_ADMISSION_QUALITY_GATED
+    raise ValueError(f"EXPERIENCE_UNKNOWN_DATA_PURPOSE:{purpose}")
+
+
 def learning_experience_from_dict(payload: dict[str, Any]) -> LearningExperience:
     lifecycle = tuple(
         CapabilityLifecycle(
@@ -1194,6 +1220,7 @@ def learning_experience_from_dict(payload: dict[str, Any]) -> LearningExperience
             str(item) for item in payload.get("model_training_targets", []) or ()
         ),
         promotion_status=str(payload.get("promotion_status") or "shadow"),
+        data_purpose=str(payload.get("data_purpose") or TRAINING_CANDIDATE_PURPOSE),
         schema_version=str(payload.get("schema_version") or LEARNING_EXPERIENCE_SCHEMA_VERSION),
     )
 
@@ -1270,28 +1297,57 @@ def project_nexus_policy(experience: LearningExperience) -> dict[str, Any]:
 
 
 def project_model_training(experience: LearningExperience) -> dict[str, Any]:
+    """Project model-training eligibility from outcome, gates, and data purpose.
+
+    Evaluation-only or policy-evidence data is training-forbidden: it never
+    produces a hard_negative target or any training target.  Ordinary
+    training-candidate data stays quality-gated (verified success + claim pass
+    labeling) and, when ineligible, becomes a hard_negative fallback.
+    """
+    admission = resolve_training_admission(experience.data_purpose)
     eligible = (
         experience.outcome == "verified_success" and experience.gate_chain.get("claim") == "pass"
     )
-    return {
+    if admission == TRAINING_ADMISSION_FORBIDDEN:
+        targets: list[str] = []
+    elif eligible:
+        targets = list(experience.model_training_targets)
+    else:
+        targets = ["hard_negative"]
+    projection = {
         "schema_version": "nexus_model_training_projection.v1",
         "experience_id": experience.experience_id,
-        "training_eligible": eligible,
-        "targets": list(experience.model_training_targets) if eligible else ["hard_negative"],
+        "training_eligible": bool(
+            eligible and admission != TRAINING_ADMISSION_FORBIDDEN
+        ),
+        "training_admission": admission,
+        "exclusion_reason": (
+            "EVALUATION_ONLY_TRAINING_FORBIDDEN"
+            if admission == TRAINING_ADMISSION_FORBIDDEN
+            else ""
+        ),
+        "targets": targets,
         "source_trace_refs": list(experience.s2t_trace_refs),
     }
+    return projection
 
 
 def apply_autodata_quality_gate(
     projection: dict[str, Any], quality_row: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Fail closed model export when trajectory quality is not training-grade."""
+    """Fail closed model export when trajectory quality is not training-grade.
+
+    A training-forbidden projection (evaluation-only / policy-evidence data)
+    can never be widened back into training material by a positive quality row:
+    the gate is purely narrowing, never re-admitting.
+    """
     gated = dict(projection)
     reasons: list[str] = []
+    forbidden = gated.get("training_admission") == TRAINING_ADMISSION_FORBIDDEN
 
     def fail_closed() -> None:
         gated["training_eligible"] = False
-        gated["targets"] = ["hard_negative"]
+        gated["targets"] = ["hard_negative"] if not forbidden else []
 
     if not gated.get("source_trace_refs"):
         reasons.append("missing_s2t_trace_refs")
@@ -1317,7 +1373,15 @@ def apply_autodata_quality_gate(
     if any("reward_hacking" in reason for reason in quality_reasons):
         reasons.append("reward_hacking_risk")
 
-    gated["training_eligible"] = bool(gated.get("training_eligible") and eligible)
+    # forbidden is purely narrowing: even a positive quality row cannot widen it.
+    # The training prohibition is reported on the model_training_gate, not the
+    # autodata trajectory-quality gate.
+    model_training_reasons = list(reasons)
+    if forbidden:
+        model_training_reasons.append("training_forbidden_by_data_purpose")
+    gated["training_eligible"] = bool(
+        gated.get("training_eligible") and eligible and not forbidden
+    )
     if reasons:
         fail_closed()
     gated["autodata_gate"] = {
@@ -1331,7 +1395,7 @@ def apply_autodata_quality_gate(
     }
     gated["model_training_gate"] = {
         "status": "pass" if gated["training_eligible"] else "fail",
-        "reasons": sorted(set(reasons)),
+        "reasons": sorted(set(model_training_reasons)),
     }
     return gated
 
