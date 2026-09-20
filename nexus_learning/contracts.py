@@ -1304,7 +1304,8 @@ def project_model_training(experience: LearningExperience) -> dict[str, Any]:
     training-candidate data stays quality-gated (verified success + claim pass
     labeling) and, when ineligible, becomes a hard_negative fallback.
     """
-    admission = resolve_training_admission(experience.data_purpose)
+    purpose = str(experience.data_purpose or TRAINING_CANDIDATE_PURPOSE).strip()
+    admission = resolve_training_admission(purpose)
     eligible = (
         experience.outcome == "verified_success" and experience.gate_chain.get("claim") == "pass"
     )
@@ -1323,7 +1324,9 @@ def project_model_training(experience: LearningExperience) -> dict[str, Any]:
         "training_admission": admission,
         "exclusion_reason": (
             "EVALUATION_ONLY_TRAINING_FORBIDDEN"
-            if admission == TRAINING_ADMISSION_FORBIDDEN
+            if purpose == EVALUATION_ONLY_PURPOSE
+            else "LEARNING_POLICY_EVIDENCE_TRAINING_FORBIDDEN"
+            if purpose == LEARNING_POLICY_EVIDENCE_PURPOSE
             else ""
         ),
         "targets": targets,
@@ -1349,13 +1352,24 @@ def apply_autodata_quality_gate(
         gated["training_eligible"] = False
         gated["targets"] = ["hard_negative"] if not forbidden else []
 
+    # Enforce the immutable purpose boundary even if a caller supplies an
+    # inconsistent/forged projection instead of using project_model_training().
+    if forbidden:
+        fail_closed()
+
     if not gated.get("source_trace_refs"):
         reasons.append("missing_s2t_trace_refs")
     if not quality_row:
         reasons.append("missing_autodata_quality_row")
         fail_closed()
+        model_training_reasons = list(reasons)
+        if forbidden:
+            model_training_reasons.append("training_forbidden_by_data_purpose")
         gated["autodata_gate"] = {"attached": False, "status": "not_attached"}
-        gated["model_training_gate"] = {"status": "fail", "reasons": reasons}
+        gated["model_training_gate"] = {
+            "status": "fail",
+            "reasons": sorted(set(model_training_reasons)),
+        }
         return gated
 
     eligible = bool(quality_row.get("eligible_for_training", False))
