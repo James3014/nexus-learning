@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from nexus_learning.experiment_integrity import (
     CALIBRATED,
     TERMINAL_NEGATIVE,
+    TERMINAL_PASS,
     validate_experiment_integrity,
 )
 
@@ -447,6 +448,8 @@ def build_learning_policy_recommendation(
         outcome = str(terminal.get("outcome") or "").upper()
         if outcome == TERMINAL_NEGATIVE or terminal.get("negative_terminal"):
             raise ValueError("RECOMMENDATION_NEGATIVE_TERMINAL_CANNOT_PROMOTE")
+        if outcome != TERMINAL_PASS:
+            raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
         if experiment_integrity.get("calibration_status") != CALIBRATED:
             raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
     if not source_episodes:
@@ -601,6 +604,8 @@ def validate_learning_policy_recommendation(recommendation: dict[str, Any]) -> N
         outcome = str(terminal.get("outcome") or "").upper()
         if outcome == TERMINAL_NEGATIVE or terminal.get("negative_terminal"):
             raise ValueError("RECOMMENDATION_NEGATIVE_TERMINAL_CANNOT_PROMOTE")
+        if outcome != TERMINAL_PASS:
+            raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
         if experiment_integrity.get("calibration_status") != CALIBRATED:
             raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
         if recommendation.get("observed_effect") != "experiment_heldout_evaluation_bound":
@@ -719,6 +724,8 @@ def evaluate_learning_policy_recommendation(
             outcome = str(terminal.get("outcome") or "").upper()
             if outcome == TERMINAL_NEGATIVE or terminal.get("negative_terminal"):
                 raise ValueError("RECOMMENDATION_NEGATIVE_TERMINAL_CANNOT_PROMOTE")
+            if outcome != TERMINAL_PASS:
+                raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
             if experiment_integrity.get("calibration_status") != CALIBRATED:
                 raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
             hostile_probes["experiment_integrity"] = "PASS"
