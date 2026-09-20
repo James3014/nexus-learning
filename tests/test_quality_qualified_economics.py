@@ -432,3 +432,63 @@ def test_optional_cost_missing_requires_explicit_reason():
             required_quality_floor=0.8,
             critical_failure_ceiling=0,
         )
+
+
+def test_baseline_is_bound_to_exact_workflow_revision():
+    baseline = _workflow(
+        identity="same-workflow",
+        revision="r1",
+        fingerprint="task-r1",
+        attempts=10,
+        qualified=10,
+        model_invocations=10,
+    )
+    improved = _workflow(
+        identity="same-workflow",
+        revision="r2",
+        fingerprint="task-r2",
+        attempts=10,
+        qualified=10,
+        model_invocations=5,
+    )
+    result = compare_workflows_at_required_quality(
+        [baseline, improved],
+        required_quality_floor=0.9,
+        critical_failure_ceiling=0,
+        baseline_workflow="same-workflow",
+        baseline_workflow_revision="r1",
+    )
+    r2 = next(
+        row
+        for row in result["rows"]
+        if row["workflow_identity"] == "same-workflow"
+        and row["workflow_revision"] == "r2"
+    )
+    assert "COST_COMPARABLE" in r2["dispositions"]
+    assert result["baseline_workflow_revision"] == "r1"
+
+
+def test_ambiguous_baseline_revision_fails_closed():
+    first = _workflow(
+        identity="same-workflow",
+        revision="r1",
+        fingerprint="task-r1",
+        attempts=10,
+        qualified=10,
+        model_invocations=10,
+    )
+    second = _workflow(
+        identity="same-workflow",
+        revision="r2",
+        fingerprint="task-r2",
+        attempts=10,
+        qualified=10,
+        model_invocations=8,
+    )
+    with pytest.raises(ReplayContractError, match="exactly one quality-qualified"):
+        compare_workflows_at_required_quality(
+            [first, second],
+            required_quality_floor=0.9,
+            critical_failure_ceiling=0,
+            baseline_workflow="same-workflow",
+        )
