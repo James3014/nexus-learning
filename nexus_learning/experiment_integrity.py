@@ -71,6 +71,36 @@ def _population_identities(
     return identities
 
 
+def _canonical_members(
+    members: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    independence_unit: str,
+) -> tuple[dict[str, Any], ...]:
+    """Validate and canonically order the full member records.
+
+    Population identity hashes protect the declared independence unit; the
+    full-member hash additionally binds all supplied member content (including
+    held-out truth/evidence fields) so those bytes cannot drift independently.
+    """
+    if not isinstance(members, (list, tuple)):
+        raise ValueError("EXPERIMENT_POPULATION_MUST_BE_SEQUENCE")
+    canonical: list[dict[str, Any]] = []
+    for member in members:
+        if not isinstance(member, Mapping):
+            raise ValueError("EXPERIMENT_POPULATION_MEMBER_INVALID")
+        item = dict(member)
+        _member_identity(item, independence_unit)
+        _hash(item)
+        canonical.append(item)
+    if not canonical:
+        raise ValueError("EXPERIMENT_EMPTY_POPULATION")
+    return tuple(
+        sorted(
+            canonical,
+            key=lambda item: (_member_identity(item, independence_unit), _hash(item)),
+        )
+    )
+
+
 def _overlap(
     calibration: tuple[str, ...], heldout: tuple[str, ...], independence_unit: str
 ) -> tuple[list[str], bool]:
@@ -105,8 +135,15 @@ def build_experiment_integrity(
     if outcome not in _TERMINAL_OUTCOMES:
         raise ValueError("EXPERIMENT_TERMINAL_OUTCOME_INVALID")
 
-    freeze_gen = int(freeze_generation)
-    eval_start_gen = int(heldout_evaluation_start_generation)
+    if (
+        isinstance(freeze_generation, bool)
+        or not isinstance(freeze_generation, int)
+        or isinstance(heldout_evaluation_start_generation, bool)
+        or not isinstance(heldout_evaluation_start_generation, int)
+    ):
+        raise ValueError("EXPERIMENT_GENERATION_MUST_BE_INTEGER")
+    freeze_gen = freeze_generation
+    eval_start_gen = heldout_evaluation_start_generation
     if freeze_gen < 0 or eval_start_gen < 0:
         raise ValueError("EXPERIMENT_GENERATION_NEGATIVE_FORBIDDEN")
     if not freeze_gen < eval_start_gen:
@@ -115,10 +152,8 @@ def build_experiment_integrity(
             f"({freeze_gen} !< {eval_start_gen})"
         )
 
-    calibration = tuple(
-        dict(member) for member in calibration_members if isinstance(member, Mapping)
-    )
-    heldout = tuple(dict(member) for member in heldout_members if isinstance(member, Mapping))
+    calibration = _canonical_members(calibration_members, independence_unit)
+    heldout = _canonical_members(heldout_members, independence_unit)
     cal_ids = _population_identities(calibration, independence_unit)
     heldout_ids = _population_identities(heldout, independence_unit)
 
@@ -141,12 +176,14 @@ def build_experiment_integrity(
         "independence_unit": independence_unit,
         "calibration": {
             "population_hash": _hash({"identities": cal_ids, "unit": independence_unit}),
+            "members_hash": _hash({"unit": independence_unit, "members": calibration}),
             "member_identities": list(cal_ids),
             "member_count": len(cal_ids),
             "members": [dict(item) for item in calibration],
         },
         "heldout": {
             "population_hash": _hash({"identities": heldout_ids, "unit": independence_unit}),
+            "members_hash": _hash({"unit": independence_unit, "members": heldout}),
             "member_identities": list(heldout_ids),
             "member_count": len(heldout_ids),
             "members": [dict(item) for item in heldout],
@@ -213,19 +250,29 @@ def validate_experiment_integrity(integrity: Any) -> None:
         raise ValueError("EXPERIMENT_CALIBRATION_POPULATION_HASH_MISMATCH")
     if heldout.get("population_hash") != expected_heldout_hash:
         raise ValueError("EXPERIMENT_HELDOUT_POPULATION_HASH_MISMATCH")
+    if calibration.get("member_count") != len(cal_ids):
+        raise ValueError("EXPERIMENT_CALIBRATION_MEMBER_COUNT_MISMATCH")
+    if heldout.get("member_count") != len(heldout_ids):
+        raise ValueError("EXPERIMENT_HELDOUT_MEMBER_COUNT_MISMATCH")
 
-    # Recompute overlap from canonical member identities at the declared unit.
-    cal_members = tuple(
-        dict(item) for item in calibration.get("members", []) or [] if isinstance(item, Mapping)
-    )
-    heldout_members = tuple(
-        dict(item) for item in heldout.get("members", []) or [] if isinstance(item, Mapping)
-    )
+    # Recompute overlap and full member-content binding from canonical records.
     try:
+        cal_members = _canonical_members(
+            list(calibration.get("members", []) or []), independence_unit
+        )
+        heldout_members = _canonical_members(
+            list(heldout.get("members", []) or []), independence_unit
+        )
         recomputed_cal = _population_identities(cal_members, independence_unit)
         recomputed_heldout = _population_identities(heldout_members, independence_unit)
     except ValueError as exc:
         raise ValueError(f"EXPERIMENT_POPULATION_MEMBER_INVALID:{exc}") from exc
+    expected_cal_members_hash = _hash({"unit": independence_unit, "members": cal_members})
+    expected_heldout_members_hash = _hash({"unit": independence_unit, "members": heldout_members})
+    if calibration.get("members_hash") != expected_cal_members_hash:
+        raise ValueError("EXPERIMENT_CALIBRATION_MEMBERS_HASH_MISMATCH")
+    if heldout.get("members_hash") != expected_heldout_members_hash:
+        raise ValueError("EXPERIMENT_HELDOUT_MEMBERS_HASH_MISMATCH")
     if list(recomputed_cal) != list(cal_ids) or list(recomputed_heldout) != list(heldout_ids):
         raise ValueError("EXPERIMENT_POPULATION_IDENTITY_MISMATCH")
     shared, has_overlap = _overlap(recomputed_cal, recomputed_heldout, independence_unit)
@@ -234,14 +281,21 @@ def validate_experiment_integrity(integrity: Any) -> None:
             f"EXPERIMENT_POPULATION_OVERLAP:{','.join(shared[:5])}"
         )
     overlap_proof = integrity.get("overlap_proof") or {}
-    if overlap_proof.get("overlap") is not False or overlap_proof.get("shared_identities"):
+    if (
+        overlap_proof.get("basis") != "semantic_" + independence_unit
+        or overlap_proof.get("overlap") is not False
+        or overlap_proof.get("shared_identities")
+    ):
         raise ValueError("EXPERIMENT_OVERLAP_PROOF_TAMPERED")
 
     frozen = integrity.get("frozen_policy") or {}
+    raw_freeze_generation = frozen.get("freeze_generation")
+    if isinstance(raw_freeze_generation, bool) or not isinstance(raw_freeze_generation, int):
+        raise ValueError("EXPERIMENT_FREEZE_GENERATION_INVALID")
     policy_payload = {
         "policy": dict(frozen.get("policy") or {}),
         "policy_derivation_ref": str(frozen.get("policy_derivation_ref") or "").strip(),
-        "freeze_generation": int(frozen.get("freeze_generation") or -1),
+        "freeze_generation": raw_freeze_generation,
     }
     expected_policy_hash = _hash(policy_payload)
     if frozen.get("policy_hash") != expected_policy_hash:
@@ -251,7 +305,7 @@ def validate_experiment_integrity(integrity: Any) -> None:
     order_proof = integrity.get("freeze_order_proof") or {}
     stored_eval_start = order_proof.get("heldout_evaluation_start_generation")
     top_level_eval_start = integrity.get("heldout_evaluation_start_generation")
-    derived_freeze_gen = int(frozen.get("freeze_generation") or -1)
+    derived_freeze_gen = raw_freeze_generation
     derived_eval_start = (
         int(top_level_eval_start)
         if isinstance(top_level_eval_start, int)
@@ -274,12 +328,18 @@ def validate_experiment_integrity(integrity: Any) -> None:
     derivation = integrity.get("policy_derivation") or {}
     if derivation.get("source") != "calibration_only":
         raise ValueError("EXPERIMENT_POLICY_SOURCE_NOT_CALIBRATION")
-    if not str(derivation.get("policy_derivation_ref") or "").strip():
+    derivation_ref = str(derivation.get("policy_derivation_ref") or "").strip()
+    frozen_derivation_ref = str(frozen.get("policy_derivation_ref") or "").strip()
+    if not derivation_ref:
         raise ValueError("EXPERIMENT_POLICY_DERIVATION_REF_MISSING")
+    if derivation_ref != frozen_derivation_ref:
+        raise ValueError("EXPERIMENT_POLICY_DERIVATION_REF_MISMATCH")
 
     calibration_status = integrity.get("calibration_status")
     if calibration_status not in _CALIBRATION_STATUSES:
         raise ValueError("EXPERIMENT_CALIBRATION_STATUS_INVALID")
+    if order_proof.get("calibration_status") != calibration_status:
+        raise ValueError("EXPERIMENT_FREEZE_ORDER_CALIBRATION_STATUS_MISMATCH")
     if calibration_status == CALIBRATED:
         reasons = tuple(integrity.get("insufficient_calibration_reasons", []) or [])
         if reasons:
@@ -290,7 +350,11 @@ def validate_experiment_integrity(integrity: Any) -> None:
             raise ValueError("EXPERIMENT_UNCALIBRATED_WITHOUT_REASONS")
 
     reject_all = integrity.get("reject_all_policy")
+    if calibration_status == FROZEN_REJECT_ALL and reject_all is None:
+        raise ValueError("EXPERIMENT_REJECT_ALL_POLICY_REQUIRED")
     if reject_all is not None:
+        if calibration_status != FROZEN_REJECT_ALL:
+            raise ValueError("EXPERIMENT_REJECT_ALL_STATUS_MISMATCH")
         if not isinstance(reject_all, Mapping) or not reject_all.get("target_policy_delta"):
             raise ValueError("EXPERIMENT_REJECT_ALL_POLICY_INVALID")
         if reject_all.get("model_success_claim") is not False:
@@ -300,7 +364,7 @@ def validate_experiment_integrity(integrity: Any) -> None:
     outcome = str(terminal.get("outcome") or "").upper()
     if outcome not in _TERMINAL_OUTCOMES:
         raise ValueError("EXPERIMENT_TERMINAL_OUTCOME_INVALID")
-    if bool(terminal.get("negative_terminal")) and outcome != TERMINAL_NEGATIVE:
+    if bool(terminal.get("negative_terminal")) != (outcome == TERMINAL_NEGATIVE):
         raise ValueError("EXPERIMENT_TERMINAL_NEGATIVE_FLAG_OUTCOME_MISMATCH")
     if outcome == TERMINAL_PASS and calibration_status != CALIBRATED:
         raise ValueError("EXPERIMENT_PASS_WITHOUT_PREFROZEN_CALIBRATION")
