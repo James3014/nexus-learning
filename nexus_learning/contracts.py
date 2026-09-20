@@ -6,6 +6,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from nexus_learning.experiment_integrity import (
+    CALIBRATED,
+    TERMINAL_NEGATIVE,
+    validate_experiment_integrity,
+)
+
 LEARNING_EXPERIENCE_SCHEMA_VERSION = "nexus_learning_experience.v1"
 RUNTIME_LEARNING_CLOSURE_SCHEMA = "nexus.runtime_learning_closure.v1"
 NEXUS_LEARNING_EPISODE_SCHEMA = "nexus.learning_episode.v1"
@@ -425,8 +431,24 @@ def build_learning_policy_recommendation(
     contract_revision: str = NEXUS_LEARNING_EPISODE_SCHEMA,
     confidence: str = "high",
     claim_ceiling: str = "SUPPORTED_POLICY_RECOMMENDATION",
+    experiment_integrity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Construct an exact content-addressed, evidence-bound learning policy recommendation."""
+    """Construct an exact content-addressed, evidence-bound learning policy recommendation.
+
+    When ``experiment_integrity`` is provided, the recommendation is bound to an
+    experiment-integrity evidence contract (calibration / held-out separation,
+    frozen policy hash, freeze-before-evaluation ordering) instead of a paired
+    memory uplift.  A negative or non-calibrated experiment terminal is never
+    promotable into a positive recommendation.
+    """
+    if experiment_integrity is not None:
+        validate_experiment_integrity(experiment_integrity)
+        terminal = experiment_integrity.get("terminal") or {}
+        outcome = str(terminal.get("outcome") or "").upper()
+        if outcome == TERMINAL_NEGATIVE or terminal.get("negative_terminal"):
+            raise ValueError("RECOMMENDATION_NEGATIVE_TERMINAL_CANNOT_PROMOTE")
+        if experiment_integrity.get("calibration_status") != CALIBRATED:
+            raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
     if not source_episodes:
         raise ValueError("RECOMMENDATION_MISSING_SOURCE_EPISODES")
     for ep in source_episodes:
@@ -444,7 +466,7 @@ def build_learning_policy_recommendation(
         "memory_off": off_arm,
         "memory_on": on_arm,
     }
-    if not paired_memory_uplift_observed(paired_payload):
+    if experiment_integrity is None and not paired_memory_uplift_observed(paired_payload):
         raise ValueError("RECOMMENDATION_PAIRED_UPLIFT_NOT_OBSERVED")
 
     # Scope validation: Scope must follow evidence and not claim global authority
@@ -455,6 +477,16 @@ def build_learning_policy_recommendation(
     ):
         raise ValueError("RECOMMENDATION_OVERBROAD_SCOPE_FORBIDDEN")
 
+    observed_effect = (
+        "experiment_heldout_evaluation_bound"
+        if experiment_integrity is not None
+        else "paired_memory_uplift_observed"
+    )
+    effect_measurement = (
+        "frozen_policy_relative_heldout_quality"
+        if experiment_integrity is not None
+        else "verifier_pass_uplift"
+    )
     payload: dict[str, Any] = {
         "schema": LEARNING_POLICY_RECOMMENDATION_SCHEMA,
         "source_episode_ids": episode_ids,
@@ -466,8 +498,8 @@ def build_learning_policy_recommendation(
         "task_fingerprint": str(task_fingerprint).strip(),
         "off_arm": dict(off_arm),
         "on_arm": dict(on_arm),
-        "observed_effect": "paired_memory_uplift_observed",
-        "effect_measurement": "verifier_pass_uplift",
+        "observed_effect": observed_effect,
+        "effect_measurement": effect_measurement,
         "confidence": str(confidence),
         "applicable_scope": dict(applicable_scope),
         "recommended_policy_delta": dict(recommended_policy_delta),
@@ -481,6 +513,8 @@ def build_learning_policy_recommendation(
         "route_mutation_allowed": False,
         "planner_mutation_allowed": False,
     }
+    if experiment_integrity is not None:
+        payload["experiment_integrity"] = experiment_integrity
     rec_hash, rec_id = canonical_recommendation_identity(payload)
     payload["recommendation_hash"] = rec_hash
     payload["recommendation_id"] = rec_id
@@ -558,14 +592,27 @@ def validate_learning_policy_recommendation(recommendation: dict[str, Any]) -> N
     if not recommendation.get("rollback_target"):
         raise ValueError("RECOMMENDATION_MISSING_ROLLBACK_TARGET")
 
-    # Paired verifier check
-    paired = {
-        "task_fingerprint": recommendation.get("task_fingerprint"),
-        "memory_off": recommendation.get("off_arm"),
-        "memory_on": recommendation.get("on_arm"),
-    }
-    if not paired_memory_uplift_observed(paired):
-        raise ValueError("RECOMMENDATION_EVIDENCE_INVALID")
+    # Evidence binding check: paired memory uplift, or experiment-integrity
+    # calibration / held-out evidence when bound to an experiment.
+    experiment_integrity = recommendation.get("experiment_integrity")
+    if experiment_integrity is not None:
+        validate_experiment_integrity(experiment_integrity)
+        terminal = experiment_integrity.get("terminal") or {}
+        outcome = str(terminal.get("outcome") or "").upper()
+        if outcome == TERMINAL_NEGATIVE or terminal.get("negative_terminal"):
+            raise ValueError("RECOMMENDATION_NEGATIVE_TERMINAL_CANNOT_PROMOTE")
+        if experiment_integrity.get("calibration_status") != CALIBRATED:
+            raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
+        if recommendation.get("observed_effect") != "experiment_heldout_evaluation_bound":
+            raise ValueError("RECOMMENDATION_EXPERIMENT_OBSERVED_EFFECT_MISMATCH")
+    else:
+        paired = {
+            "task_fingerprint": recommendation.get("task_fingerprint"),
+            "memory_off": recommendation.get("off_arm"),
+            "memory_on": recommendation.get("on_arm"),
+        }
+        if not paired_memory_uplift_observed(paired):
+            raise ValueError("RECOMMENDATION_EVIDENCE_INVALID")
 
 
 def canonical_validation_identity(payload: dict[str, Any]) -> tuple[str, str]:
@@ -662,6 +709,24 @@ def evaluate_learning_policy_recommendation(
         hostile_probes["scope_conformance"] = "FAIL"
     else:
         hostile_probes["scope_conformance"] = "PASS"
+
+    # 7. Experiment-Integrity Check (when bound to an experiment)
+    experiment_integrity = recommendation.get("experiment_integrity")
+    if experiment_integrity is not None:
+        try:
+            validate_experiment_integrity(experiment_integrity)
+            terminal = experiment_integrity.get("terminal") or {}
+            outcome = str(terminal.get("outcome") or "").upper()
+            if outcome == TERMINAL_NEGATIVE or terminal.get("negative_terminal"):
+                raise ValueError("RECOMMENDATION_NEGATIVE_TERMINAL_CANNOT_PROMOTE")
+            if experiment_integrity.get("calibration_status") != CALIBRATED:
+                raise ValueError("RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED")
+            hostile_probes["experiment_integrity"] = "PASS"
+        except ValueError as exc:
+            hostile_probes["experiment_integrity"] = f"FAIL:{exc}"
+            blockers.append(f"experiment_integrity_invalid:{exc}")
+    else:
+        hostile_probes["experiment_integrity"] = "NOT_BOUND"
 
     # Disposition Determination
     if blockers:
