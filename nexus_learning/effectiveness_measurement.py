@@ -565,6 +565,439 @@ def replay_scorecard(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 reduce_attempts = replay_scorecard
 
 
+QUALITY_QUALIFIED_ECONOMICS_SCHEMA = "nexus.learning_quality_qualified_economics.v1"
+NUMERIC_COUNT_FIELDS = (
+    "attempt_count",
+    "qualified_success_count",
+    "critical_failure_count",
+    "semantic_failure_count",
+    "provider_failure_count",
+    "false_allow_count",
+    "model_invocation_count",
+    "provider_invocation_count",
+    "fallback_count",
+    "token_usage",
+    "human_intervention_count",
+)
+OPTIONAL_COST_FIELDS = (
+    "monetary_cost_usd",
+    "wall_time_seconds",
+)
+QUALITY_REQUIRED_FIELDS = (
+    "attempt_count",
+    "qualified_success_count",
+    "critical_failure_count",
+)
+COST_COMPARISON_FIELDS = (
+    "model_invocation_count",
+    "provider_invocation_count",
+    "fallback_count",
+    "token_usage",
+    "wall_time_seconds",
+    "monetary_cost_usd",
+    "human_intervention_count",
+)
+QUALITY_DISPOSITIONS = frozenset(
+    {
+        "QUALITY_QUALIFIED",
+        "QUALITY_FLOOR_FAILED",
+        "INSUFFICIENT_COST_EVIDENCE",
+        "COST_COMPARABLE",
+        "NO_INCREMENTAL_VALUE",
+        "QUALITY_SUPERIOR",
+    }
+)
+
+
+@dataclass(frozen=True)
+class QualityWorkflowRow:
+    """One canonical quality-laden workflow row for cost-at-required-quality comparison."""
+
+    values: tuple[tuple[str, Any], ...]
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "QualityWorkflowRow":
+        if not isinstance(raw, Mapping):
+            raise ReplayContractError("quality workflow row must be a mapping")
+        required_identity = ("workflow_identity", "workflow_revision", "task_fingerprint")
+        missing = [key for key in required_identity if key not in raw]
+        if missing:
+            raise ReplayContractError("missing required fields: " + ",".join(missing))
+        identity = {key: raw[key] for key in required_identity}
+        if any(not isinstance(identity[key], str) or not identity[key].strip() for key in required_identity):
+            raise ReplayContractError("workflow identity fields must be non-empty strings")
+        missingness = _string_sequence("missingness_reasons", raw.get("missingness_reasons") or [])
+        ineligible = _string_sequence("ineligibility_reasons", raw.get("ineligibility_reasons") or [])
+        values: dict[str, Any] = {key: deepcopy(raw[key]) for key in required_identity}
+        for field in NUMERIC_COUNT_FIELDS:
+            value = raw.get(field)
+            if value is None:
+                if not _has_missing_reason(missingness, field):
+                    raise ReplayContractError(
+                        f"{field} missing requires an explicit missingness reason"
+                    )
+                values[field] = None
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ReplayContractError(f"{field} must be a non-negative integer")
+            values[field] = value
+        for field in OPTIONAL_COST_FIELDS:
+            value = raw.get(field)
+            if value is None:
+                if not _has_missing_reason(missingness, field):
+                    raise ReplayContractError(
+                        f"{field} missing requires an explicit missingness reason"
+                    )
+                values[field] = None
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or value < 0
+            ):
+                raise ReplayContractError(f"{field} must be finite and non-negative")
+            values[field] = float(value)
+        attempt = values["attempt_count"]
+        if (
+            attempt is not None
+            and values["qualified_success_count"] is not None
+            and values["qualified_success_count"] > attempt
+        ):
+            raise ReplayContractError("qualified_success_count cannot exceed attempt_count")
+        sanity = (
+            "critical_failure_count",
+            "semantic_failure_count",
+            "provider_failure_count",
+        )
+        if attempt is not None and any(
+            values[field] is not None and values[field] > attempt for field in sanity
+        ):
+            raise ReplayContractError("failure counts cannot exceed attempt_count")
+        values["missingness_reasons"] = missingness
+        values["ineligibility_reasons"] = ineligible
+        return cls(tuple(sorted(values.items())))
+
+    def to_dict(self) -> dict[str, Any]:
+        result = deepcopy(dict(self.values))
+        for field in ("missingness_reasons", "ineligibility_reasons"):
+            result[field] = list(result[field])
+        return result
+
+    def identity(self) -> tuple[Any, ...]:
+        row = dict(self.values)
+        return tuple(
+            row[key] for key in ("workflow_identity", "workflow_revision", "task_fingerprint")
+        )
+
+
+def _quality_metric(workflow: Mapping[str, Any], floor: float, ceiling: int) -> dict[str, Any]:
+    attempts = workflow["attempt_count"]
+    qualified = workflow["qualified_success_count"]
+    critical_failures = workflow["critical_failure_count"]
+    missing_quality = [
+        field for field in QUALITY_REQUIRED_FIELDS if workflow[field] is None
+    ]
+    telemetry_complete = not missing_quality
+    rate = (
+        qualified / attempts
+        if telemetry_complete and attempts is not None and attempts > 0 and qualified is not None
+        else None
+    )
+    floor_met = telemetry_complete and rate is not None and rate >= floor
+    ceiling_met = (
+        telemetry_complete
+        and critical_failures is not None
+        and critical_failures <= ceiling
+    )
+    return {
+        "attempt_count": attempts,
+        "qualified_success_count": qualified,
+        "qualified_success_rate": rate,
+        "critical_failure_count": critical_failures,
+        "semantic_failure_count": workflow["semantic_failure_count"],
+        "provider_failure_count": workflow["provider_failure_count"],
+        "quality_floor": floor,
+        "critical_failure_ceiling": ceiling,
+        "quality_telemetry_complete": telemetry_complete,
+        "missing_quality_telemetry": missing_quality,
+        "floor_met": floor_met,
+        "ceiling_met": ceiling_met,
+        "quality_gate": "PASS" if floor_met and ceiling_met else "FAIL",
+    }
+
+
+def _cost_metrics(workflow: Mapping[str, Any]) -> dict[str, Any]:
+    explicit_missing = [
+        field
+        for field in COST_COMPARISON_FIELDS
+        if workflow[field] is None and _has_missing_reason(
+            workflow["missingness_reasons"], field
+        )
+    ]
+    implicit_missing = [
+        field
+        for field in COST_COMPARISON_FIELDS
+        if workflow[field] is None and not _has_missing_reason(
+            workflow["missingness_reasons"], field
+        )
+    ]
+    return {
+        "model_invocation_count": workflow["model_invocation_count"],
+        "provider_invocation_count": workflow["provider_invocation_count"],
+        "fallback_count": workflow["fallback_count"],
+        "token_usage": workflow["token_usage"],
+        "wall_time_seconds": workflow["wall_time_seconds"],
+        "monetary_cost_usd": workflow["monetary_cost_usd"],
+        "human_intervention_count": workflow["human_intervention_count"],
+        "explicitly_missing_telemetry": explicit_missing,
+        "implicitly_missing_telemetry": implicit_missing,
+        "cost_telemetry_complete": not explicit_missing and not implicit_missing,
+    }
+
+
+def _cost_comparable(
+    cost: Mapping[str, Any],
+    baseline_cost: Mapping[str, Any],
+) -> bool:
+    """Require conservative Pareto cost improvement, not an arbitrary call-count sum."""
+    if not cost.get("cost_telemetry_complete") or not baseline_cost.get(
+        "cost_telemetry_complete"
+    ):
+        return False
+    strictly_better = False
+    for field in COST_COMPARISON_FIELDS:
+        candidate_value = cost.get(field)
+        baseline_value = baseline_cost.get(field)
+        if candidate_value is None or baseline_value is None:
+            return False
+        if candidate_value > baseline_value:
+            return False
+        if candidate_value < baseline_value:
+            strictly_better = True
+    return strictly_better
+
+
+def _quality_superior(
+    quality: Mapping[str, Any],
+    baseline_quality: Mapping[str, Any],
+) -> bool:
+    candidate_rate = quality.get("qualified_success_rate")
+    baseline_rate = baseline_quality.get("qualified_success_rate")
+    if candidate_rate is None or baseline_rate is None:
+        return False
+    return candidate_rate > baseline_rate
+
+
+def _aggregate_workflow_units(
+    data: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Aggregate per (workflow_identity, workflow_revision) into one comparison unit."""
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in data:
+        groups.setdefault((row["workflow_identity"], row["workflow_revision"]), []).append(row)
+    units: list[dict[str, Any]] = []
+    for key in sorted(groups):
+        members = groups[key]
+        ineligible_members = [
+            member for member in members if member["ineligibility_reasons"]
+        ]
+        if ineligible_members:
+            units.append(
+                {
+                    "workflow_identity": key[0],
+                    "workflow_revision": key[1],
+                    "gate_status": "INELIGIBLE",
+                    "exclusions": sorted(
+                        {
+                            f"{key[0]}:ineligible:{reason}"
+                            for member in ineligible_members
+                            for reason in member["ineligibility_reasons"]
+                        }
+                    ),
+                }
+            )
+            continue
+        eligible = members
+        aggregated: dict[str, Any] = {
+            "workflow_identity": key[0],
+            "workflow_revision": key[1],
+            "gate_status": "CANDIDATE",
+            "missingness_reasons": tuple(
+                sorted(
+                    {
+                        reason
+                        for member in eligible
+                        for reason in member["missingness_reasons"]
+                    }
+                )
+            ),
+        }
+        for field in NUMERIC_COUNT_FIELDS + OPTIONAL_COST_FIELDS:
+            present = [member[field] for member in eligible if member[field] is not None]
+            aggregated[field] = sum(present) if len(present) == len(eligible) else None
+        units.append(aggregated)
+    return units
+
+
+def compare_workflows_at_required_quality(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    required_quality_floor: float,
+    critical_failure_ceiling: int,
+    baseline_workflow: str = "",
+    baseline_workflow_revision: str = "",
+) -> dict[str, Any]:
+    """Compare workflows only after a required-quality gate has passed.
+
+    A cheaper or faster workflow is never an architecture win if it lands below
+    the required quality floor or above the critical-failure ceiling.  Missing
+    cost telemetry is never treated as zero cost.
+    """
+    if isinstance(required_quality_floor, bool) or not isinstance(
+        required_quality_floor, (int, float)
+    ) or not isfinite(required_quality_floor) or not 0 <= required_quality_floor <= 1:
+        raise ReplayContractError("required_quality_floor must be a finite number in [0, 1]")
+    if isinstance(critical_failure_ceiling, bool) or not isinstance(
+        critical_failure_ceiling, int
+    ) or critical_failure_ceiling < 0:
+        raise ReplayContractError("critical_failure_ceiling must be a non-negative integer")
+    normalized = _deduplicate_workflows(rows)
+    units = _aggregate_workflow_units([row.to_dict() for row in normalized])
+    rows_out: list[dict[str, Any]] = []
+    comparable: list[str] = []
+    no_incremental: list[str] = []
+    insufficient_cost: list[str] = []
+    superior_quality: list[str] = []
+    below_floor: list[str] = []
+    for unit in units:
+        body: dict[str, Any] = {
+            "workflow_identity": unit["workflow_identity"],
+            "workflow_revision": unit["workflow_revision"],
+            "gate_status": unit["gate_status"],
+            "dispositions": [],
+            "exclusions": [],
+            "claim_ceiling": (
+                "cost-at-required-quality observation only; no route/worker/model/production claim"
+            ),
+        }
+        if unit["gate_status"] == "INELIGIBLE":
+            body["exclusions"] = unit["exclusions"]
+            rows_out.append(body)
+            continue
+        quality = _quality_metric(unit, required_quality_floor, critical_failure_ceiling)
+        body["quality"] = quality
+        body["cost"] = _cost_metrics(unit)
+        if quality["quality_gate"] != "PASS":
+            body["gate_status"] = "QUALITY_FLOOR_FAILED"
+            body["dispositions"].append("QUALITY_FLOOR_FAILED")
+            below_floor.append(unit["workflow_identity"])
+            rows_out.append(body)
+            continue
+        body["gate_status"] = "QUALITY_QUALIFIED"
+        rows_out.append(body)
+    qualified = [body for body in rows_out if body["gate_status"] == "QUALITY_QUALIFIED"]
+    baseline_body: dict[str, Any] | None = None
+    if qualified:
+        if baseline_workflow:
+            candidates = [
+                body
+                for body in qualified
+                if body["workflow_identity"] == baseline_workflow
+                and (
+                    not baseline_workflow_revision
+                    or body["workflow_revision"] == baseline_workflow_revision
+                )
+            ]
+            if len(candidates) != 1:
+                raise ReplayContractError(
+                    "baseline_workflow must identify exactly one quality-qualified "
+                    "workflow+revision unit"
+                )
+            baseline_body = candidates[0]
+        else:
+            baseline_body = qualified[0]
+        baseline_workflow = baseline_body["workflow_identity"]
+        baseline_workflow_revision = baseline_body["workflow_revision"]
+    for body in rows_out:
+        if body["gate_status"] != "QUALITY_QUALIFIED":
+            continue
+        cost = body["cost"]
+        baseline_cost = baseline_body["cost"] if baseline_body is not None else None
+        if (
+            not cost["cost_telemetry_complete"]
+            or baseline_cost is None
+            or not baseline_cost["cost_telemetry_complete"]
+        ):
+            body["dispositions"].append("INSUFFICIENT_COST_EVIDENCE")
+            insufficient_cost.append(body["workflow_identity"])
+            continue
+        if baseline_body is None:
+            body["dispositions"].append("NO_INCREMENTAL_VALUE")
+            continue
+        if (
+            body["workflow_identity"] == baseline_workflow
+            and body["workflow_revision"] == baseline_workflow_revision
+        ):
+            body["dispositions"].append("NO_INCREMENTAL_VALUE")
+            continue
+        if _quality_superior(body["quality"], baseline_body["quality"]):
+            body["dispositions"].append("QUALITY_SUPERIOR")
+            superior_quality.append(body["workflow_identity"])
+            continue
+        if _cost_comparable(cost, baseline_cost):
+            body["dispositions"].append("COST_COMPARABLE")
+            comparable.append(body["workflow_identity"])
+            continue
+        body["dispositions"].append("NO_INCREMENTAL_VALUE")
+        no_incremental.append(body["workflow_identity"])
+
+    return {
+        "schema": QUALITY_QUALIFIED_ECONOMICS_SCHEMA,
+        "observational_only": True,
+        "adaptation_applied": False,
+        "authority_effect": False,
+        "required_quality_floor": float(required_quality_floor),
+        "critical_failure_ceiling": int(critical_failure_ceiling),
+        "baseline_workflow": baseline_workflow,
+        "baseline_workflow_revision": baseline_workflow_revision,
+        "rows": rows_out,
+        "summary": {
+            "workflow_count": len(rows_out),
+            "eligible": len(qualified),
+            "below_floor_count": len(below_floor),
+            "quality_qualified_count": len(qualified),
+            "comparable_count": len(comparable),
+            "no_incremental_value_count": len(
+                {
+                    body["workflow_identity"]
+                    for body in rows_out
+                    if "NO_INCREMENTAL_VALUE" in body["dispositions"]
+                }
+            ),
+            "insufficient_cost_evidence_count": len(insufficient_cost),
+            "superior_quality_count": len(superior_quality),
+            "cost_improving_workflows": sorted(set(comparable)),
+        },
+        "claim_ceiling": (
+            "cost-at-required-quality observation only; no route/worker/model/production claim"
+        ),
+    }
+
+
+def _deduplicate_workflows(rows: Iterable[Mapping[str, Any]]) -> list[QualityWorkflowRow]:
+    found: dict[tuple[Any, ...], QualityWorkflowRow] = {}
+    for raw in rows:
+        item = QualityWorkflowRow.from_mapping(raw)
+        previous = found.get(item.identity())
+        if previous is not None:
+            raise ReplayContractError(
+                "duplicate quality workflow identity: " + repr(item.identity())
+            )
+        found[item.identity()] = item
+    return [found[key] for key in sorted(found, key=repr)]
+
+
 __all__ = [
     "SCHEMA",
     "AttemptRow",
@@ -573,4 +1006,7 @@ __all__ = [
     "replay_scorecard",
     "reduce_attempts",
     "paired_memory_uplift",
+    "QUALITY_QUALIFIED_ECONOMICS_SCHEMA",
+    "QualityWorkflowRow",
+    "compare_workflows_at_required_quality",
 ]
