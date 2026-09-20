@@ -16,7 +16,7 @@ def _workflow(
     fingerprint: str = "task-1",
     attempts: int,
     qualified: int,
-    critical: int = 0,
+    critical: int | None = 0,
     semantic: int = 0,
     provider: int = 0,
     model_invocations: int | None,
@@ -83,7 +83,7 @@ def test_donor_lesson_cheaper_below_floor_never_wins():
     assert _by_identity(result, "deterministic-only")["gate_status"] == "QUALITY_QUALIFIED"
     assert _by_identity(result, "cascade")["gate_status"] == "QUALITY_FLOOR_FAILED"
     assert "QUALITY_FLOOR_FAILED" in _by_identity(result, "cascade")["dispositions"]
-    assert result["summary"]["cheapest_qualified_workflow"] == "deterministic-only"
+    assert result["summary"]["cost_improving_workflows"] == []
     assert result["summary"]["below_floor_count"] == 1
 
 
@@ -110,7 +110,7 @@ def test_cheaper_qualified_workflow_is_comparable():
     assert _by_identity(result, "cheaper")["gate_status"] == "QUALITY_QUALIFIED"
     assert "COST_COMPARABLE" in _by_identity(result, "cheaper")["dispositions"]
     assert result["summary"]["comparable_count"] == 1
-    assert result["summary"]["cheapest_qualified_workflow"] == "cheaper"
+    assert result["summary"]["cost_improving_workflows"] == ["cheaper"]
 
 
 # AC3: a more expensive workflow is represented as quality-superior when its
@@ -310,3 +310,125 @@ def test_aggregation_across_task_fingerprints():
     assert body["quality"]["qualified_success_count"] == 10
     assert body["cost"]["model_invocation_count"] == 10
     assert body["cost"]["token_usage"] == 300
+
+def test_missing_critical_failure_telemetry_never_becomes_zero():
+    row = _workflow(
+        identity="missing-critical",
+        attempts=10,
+        qualified=10,
+        critical=None,
+        model_invocations=1,
+        missing=("critical_failure_count",),
+    )
+    result = compare_workflows_at_required_quality(
+        [row],
+        required_quality_floor=0.9,
+        critical_failure_ceiling=0,
+    )
+    body = _by_identity(result, "missing-critical")
+    assert body["gate_status"] == "QUALITY_FLOOR_FAILED"
+    assert body["quality"]["critical_failure_count"] is None
+    assert body["quality"]["quality_telemetry_complete"] is False
+    assert "critical_failure_count" in body["quality"]["missing_quality_telemetry"]
+
+
+def test_lower_call_count_with_higher_monetary_cost_is_not_cost_comparable():
+    baseline = _workflow(
+        identity="baseline-cost",
+        attempts=10,
+        qualified=10,
+        model_invocations=10,
+        monetary=1.0,
+    )
+    deceptive = _workflow(
+        identity="fewer-calls-higher-money",
+        attempts=10,
+        qualified=10,
+        model_invocations=5,
+        monetary=100.0,
+    )
+    result = compare_workflows_at_required_quality(
+        [baseline, deceptive],
+        required_quality_floor=0.9,
+        critical_failure_ceiling=0,
+        baseline_workflow="baseline-cost",
+    )
+    body = _by_identity(result, "fewer-calls-higher-money")
+    assert "COST_COMPARABLE" not in body["dispositions"]
+    assert "NO_INCREMENTAL_VALUE" in body["dispositions"]
+
+
+def test_mixed_ineligible_fingerprint_fails_entire_workflow_unit_closed():
+    good = _workflow(
+        identity="wf-mixed",
+        revision="r1",
+        fingerprint="task-good",
+        attempts=5,
+        qualified=5,
+        model_invocations=2,
+    )
+    bad = _workflow(
+        identity="wf-mixed",
+        revision="r1",
+        fingerprint="task-bad",
+        attempts=5,
+        qualified=5,
+        model_invocations=2,
+        ineligible=("missing_required_source",),
+    )
+    result = compare_workflows_at_required_quality(
+        [good, bad],
+        required_quality_floor=0.9,
+        critical_failure_ceiling=0,
+    )
+    body = _by_identity(result, "wf-mixed")
+    assert body["gate_status"] == "INELIGIBLE"
+    assert body["exclusions"] == ["wf-mixed:ineligible:missing_required_source"]
+
+
+def test_quality_floor_uses_unrounded_rate():
+    row = _workflow(
+        identity="rounding-edge",
+        attempts=100000,
+        qualified=94996,
+        model_invocations=1,
+    )
+    result = compare_workflows_at_required_quality(
+        [row],
+        required_quality_floor=0.95,
+        critical_failure_ceiling=0,
+    )
+    body = _by_identity(result, "rounding-edge")
+    assert body["quality"]["qualified_success_rate"] == pytest.approx(0.94996)
+    assert body["gate_status"] == "QUALITY_FLOOR_FAILED"
+
+
+def test_quality_floor_above_one_is_rejected():
+    row = _workflow(
+        identity="invalid-floor-high",
+        attempts=1,
+        qualified=1,
+        model_invocations=1,
+    )
+    with pytest.raises(ReplayContractError):
+        compare_workflows_at_required_quality(
+            [row],
+            required_quality_floor=1.01,
+            critical_failure_ceiling=0,
+        )
+
+
+def test_optional_cost_missing_requires_explicit_reason():
+    row = _workflow(
+        identity="missing-money",
+        attempts=5,
+        qualified=5,
+        model_invocations=1,
+        monetary=None,
+    )
+    with pytest.raises(ReplayContractError, match="monetary_cost_usd missing"):
+        compare_workflows_at_required_quality(
+            [row],
+            required_quality_floor=0.8,
+            critical_failure_ceiling=0,
+        )
