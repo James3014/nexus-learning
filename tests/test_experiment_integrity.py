@@ -23,6 +23,7 @@ from nexus_learning.experiment_integrity import (
     INDEPENDENCE_UNIT_ROW,
     INSUFFICIENT_CALIBRATION,
     TERMINAL_NEGATIVE,
+    TERMINAL_DEFER,
     TERMINAL_PASS,
     TERMINAL_STOP,
     build_experiment_integrity,
@@ -379,3 +380,130 @@ def _recommendation_episode() -> dict:
         lesson_disposition="graduated",
         learning_write_succeeded=True,
     )
+
+def test_zero_generation_freeze_is_valid_when_evaluation_starts_later():
+    calibration, heldout = _cal_heldout()
+    integrity = build_experiment_integrity(
+        experiment_id="exp:zero-gen",
+        calibration_members=calibration,
+        heldout_members=heldout,
+        independence_unit=INDEPENDENCE_UNIT_ROW,
+        policy_derivation_ref="calibration_analysis:zero",
+        frozen_policy=_frozen_policy(),
+        freeze_generation=0,
+        heldout_evaluation_start_generation=1,
+        calibration_status=CALIBRATED,
+        terminal_outcome=TERMINAL_PASS,
+    )
+    validate_experiment_integrity(integrity)
+
+
+def test_heldout_member_truth_is_hash_bound():
+    calibration, heldout = _cal_heldout()
+    heldout[0]["truth"] = "ALLOW"
+    integrity = build_experiment_integrity(
+        experiment_id="exp:truth-bound",
+        calibration_members=calibration,
+        heldout_members=heldout,
+        independence_unit=INDEPENDENCE_UNIT_ROW,
+        policy_derivation_ref="calibration_analysis:truth",
+        frozen_policy=_frozen_policy(),
+        freeze_generation=1,
+        heldout_evaluation_start_generation=2,
+        calibration_status=CALIBRATED,
+        terminal_outcome=TERMINAL_PASS,
+    )
+    integrity["heldout"]["members"][0]["truth"] = "BLOCK"
+    with pytest.raises(ValueError, match="EXPERIMENT_HELDOUT_MEMBERS_HASH_MISMATCH"):
+        validate_experiment_integrity(integrity)
+
+
+@pytest.mark.parametrize("terminal_outcome", [TERMINAL_STOP, TERMINAL_DEFER])
+def test_non_pass_terminal_cannot_be_promoted(terminal_outcome):
+    calibration, heldout = _cal_heldout()
+    integrity = build_experiment_integrity(
+        experiment_id=f"exp:{terminal_outcome.lower()}",
+        calibration_members=calibration,
+        heldout_members=heldout,
+        independence_unit=INDEPENDENCE_UNIT_ROW,
+        policy_derivation_ref="calibration_analysis:terminal",
+        frozen_policy=_frozen_policy(),
+        freeze_generation=1,
+        heldout_evaluation_start_generation=2,
+        calibration_status=CALIBRATED,
+        terminal_outcome=terminal_outcome,
+    )
+    ep = build_nexus_learning_episode(
+        task_id="task-non-pass",
+        source="runtime_closure",
+        terminal_outcome="SUCCESS",
+        terminal_evidence={
+            "verifier": "pytest",
+            "receipt": "rec-non-pass",
+            "verifier_status": "passed",
+        },
+        qualification={
+            "repeatability": True,
+            "prevention_rule": "rule",
+            "authority_qualification": True,
+        },
+        lesson_disposition="graduated",
+        learning_write_succeeded=True,
+    )
+    with pytest.raises(
+        ValueError, match="RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED"
+    ):
+        build_learning_policy_recommendation(
+            source_episodes=[ep],
+            source_evidence_refs=[
+                "rec-non-pass",
+                "retrieval_receipt:g2",
+                "physical_consumption:local",
+            ],
+            source_revision="rev-terminal",
+            runtime_identity="local_model_executor",
+            task_fingerprint="task-non-pass",
+            off_arm={"task_id": "task-non-pass", "verifier_status": "failed", "receipt": "off"},
+            on_arm={"task_id": "task-non-pass", "verifier_status": "passed", "receipt": "on"},
+            applicable_scope={"task_family": "experiment"},
+            recommended_policy_delta={"experiment_policy": {"enabled": True}},
+            current_policy={"experiment_policy": {"enabled": False}},
+            expected_effect="Only PASS experiments may be promoted",
+            rollback_target={"target_state": {"experiment_policy": {"enabled": False}}},
+            experiment_integrity=integrity,
+        )
+
+
+def test_non_mapping_population_member_fails_closed():
+    calibration, heldout = _cal_heldout()
+    calibration.append("not-a-member")
+    with pytest.raises(ValueError, match="EXPERIMENT_POPULATION_MEMBER_INVALID"):
+        build_experiment_integrity(
+            experiment_id="exp:bad-member",
+            calibration_members=calibration,
+            heldout_members=heldout,
+            independence_unit=INDEPENDENCE_UNIT_ROW,
+            policy_derivation_ref="calibration_analysis:bad-member",
+            frozen_policy=_frozen_policy(),
+            freeze_generation=1,
+            heldout_evaluation_start_generation=2,
+        )
+
+
+def test_policy_derivation_reference_is_cross_bound():
+    calibration, heldout = _cal_heldout()
+    integrity = build_experiment_integrity(
+        experiment_id="exp:derivation-bound",
+        calibration_members=calibration,
+        heldout_members=heldout,
+        independence_unit=INDEPENDENCE_UNIT_ROW,
+        policy_derivation_ref="calibration_analysis:bound",
+        frozen_policy=_frozen_policy(),
+        freeze_generation=1,
+        heldout_evaluation_start_generation=2,
+        calibration_status=CALIBRATED,
+        terminal_outcome=TERMINAL_PASS,
+    )
+    integrity["policy_derivation"]["policy_derivation_ref"] = "calibration_analysis:other"
+    with pytest.raises(ValueError, match="EXPERIMENT_POLICY_DERIVATION_REF_MISMATCH"):
+        validate_experiment_integrity(integrity)
