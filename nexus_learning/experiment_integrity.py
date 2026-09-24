@@ -42,10 +42,277 @@ TERMINAL_DEFER = "DEFER"
 TERMINAL_NEGATIVE = "NEGATIVE"
 _TERMINAL_OUTCOMES = frozenset({TERMINAL_PASS, TERMINAL_STOP, TERMINAL_DEFER, TERMINAL_NEGATIVE})
 
+EVIDENCE_ORIGIN_SCHEMA = "nexus.learning_evidence_origin_provenance.v1"
+SIMULATION_ONLY = "SIMULATION_ONLY"
+MOCK_TRANSPORT = "MOCK_TRANSPORT"
+LOCAL_FAKE_PROVIDER = "LOCAL_FAKE_PROVIDER"
+PHYSICAL_LOCAL_MODEL = "PHYSICAL_LOCAL_MODEL"
+REMOTE_PROVIDER_OBSERVED = "REMOTE_PROVIDER_OBSERVED"
+UNKNOWN_ORIGIN = "UNKNOWN"
+_EVIDENCE_ORIGINS = frozenset(
+    {
+        SIMULATION_ONLY,
+        MOCK_TRANSPORT,
+        LOCAL_FAKE_PROVIDER,
+        PHYSICAL_LOCAL_MODEL,
+        REMOTE_PROVIDER_OBSERVED,
+        UNKNOWN_ORIGIN,
+    }
+)
+
+EFFECT_NOT_STARTED = "NOT_STARTED"
+EFFECT_SUCCEEDED = "SUCCEEDED"
+EFFECT_FAILED = "FAILED"
+EFFECT_OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+_EFFECT_OUTCOMES = frozenset(
+    {EFFECT_NOT_STARTED, EFFECT_SUCCEEDED, EFFECT_FAILED, EFFECT_OUTCOME_UNKNOWN}
+)
+
 
 def _hash(payload: Any) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _optional_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"EVIDENCE_ORIGIN_{field.upper()}_INVALID")
+    return value.strip()
+
+
+def _identity(
+    *,
+    provider: str | None,
+    model: str | None,
+    revision: str | None = None,
+) -> dict[str, str | None]:
+    return {
+        "provider": _optional_text(provider, "identity_provider"),
+        "model": _optional_text(model, "identity_model"),
+        "revision": _optional_text(revision, "identity_revision"),
+    }
+
+
+def _sha256_ref(value: Any) -> bool:
+    if not isinstance(value, str) or not value.startswith("sha256:") or len(value) != 71:
+        return False
+    return all(char in "0123456789abcdef" for char in value[7:])
+
+
+def _validate_identity(identity: Any, field: str) -> dict[str, Any]:
+    if not isinstance(identity, Mapping):
+        raise ValueError(f"EVIDENCE_ORIGIN_{field.upper()}_IDENTITY_INVALID")
+    if set(identity) != {"provider", "model", "revision"}:
+        raise ValueError(f"EVIDENCE_ORIGIN_{field.upper()}_IDENTITY_INVALID")
+    return {
+        key: _optional_text(identity.get(key), f"{field}_{key}")
+        for key in ("provider", "model", "revision")
+    }
+
+
+def build_evidence_origin_provenance(
+    *,
+    origin_class: str,
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+    configured_provider: str | None = None,
+    configured_model: str | None = None,
+    observed_provider: str | None = None,
+    observed_model: str | None = None,
+    observed_revision: str | None = None,
+    external_effect_started: bool = False,
+    effect_outcome: str = EFFECT_NOT_STARTED,
+    effect_identity: str | None = None,
+    operation_id: str | None = None,
+    observation_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build provenance without inferring observed execution from configuration.
+
+    The observation receipt is a public-safe projection of a durable physical
+    receipt. Its source_receipt_sha256 binds that projection to the owning
+    transport or effect journal. This module validates integrity and
+    compatibility, not the external journal's authenticity.
+    """
+    origin = str(origin_class).strip().upper()
+    outcome = str(effect_outcome).strip().upper()
+    receipt = None
+    if observation_receipt is not None:
+        if not isinstance(observation_receipt, Mapping):
+            raise ValueError("EVIDENCE_ORIGIN_RECEIPT_INVALID")
+        payload = dict(observation_receipt)
+        receipt = {"payload": payload, "payload_hash": _hash(payload)}
+
+    provenance_without_hash = {
+        "schema": EVIDENCE_ORIGIN_SCHEMA,
+        "origin_class": origin,
+        "requested_identity": _identity(
+            provider=requested_provider,
+            model=requested_model,
+        ),
+        "configured_identity": _identity(
+            provider=configured_provider,
+            model=configured_model,
+        ),
+        "observed_identity": _identity(
+            provider=observed_provider,
+            model=observed_model,
+            revision=observed_revision,
+        ),
+        "external_effect": {
+            "started": external_effect_started,
+            "outcome": outcome,
+            "effect_identity": _optional_text(effect_identity, "effect_identity"),
+            "operation_id": _optional_text(operation_id, "operation_id"),
+        },
+        "observation_receipt": receipt,
+        "claim_ceiling": (
+            "evidence-origin provenance only; external receipt authenticity and "
+            "provider/model success claims require the owning producer gate"
+        ),
+    }
+    provenance = {
+        **provenance_without_hash,
+        "binding_hash": _hash(provenance_without_hash),
+    }
+    validate_evidence_origin_provenance(provenance)
+    return provenance
+
+
+def validate_evidence_origin_provenance(provenance: Any) -> None:
+    """Fail closed on physical/provider classifications unsupported by receipts."""
+    if not isinstance(provenance, Mapping):
+        raise ValueError("EVIDENCE_ORIGIN_NOT_A_MAPPING")
+    if provenance.get("schema") != EVIDENCE_ORIGIN_SCHEMA:
+        raise ValueError("EVIDENCE_ORIGIN_SCHEMA_INVALID")
+
+    origin = str(provenance.get("origin_class") or "").upper()
+    if origin not in _EVIDENCE_ORIGINS:
+        raise ValueError("EVIDENCE_ORIGIN_CLASS_INVALID")
+    _validate_identity(provenance.get("requested_identity"), "requested")
+    _validate_identity(provenance.get("configured_identity"), "configured")
+    observed = _validate_identity(provenance.get("observed_identity"), "observed")
+
+    effect = provenance.get("external_effect")
+    if not isinstance(effect, Mapping):
+        raise ValueError("EVIDENCE_ORIGIN_EFFECT_INVALID")
+    if set(effect) != {"started", "outcome", "effect_identity", "operation_id"}:
+        raise ValueError("EVIDENCE_ORIGIN_EFFECT_INVALID")
+    if not isinstance(effect.get("started"), bool):
+        raise ValueError("EVIDENCE_ORIGIN_EFFECT_STARTED_INVALID")
+    outcome = str(effect.get("outcome") or "").upper()
+    if outcome not in _EFFECT_OUTCOMES:
+        raise ValueError("EVIDENCE_ORIGIN_EFFECT_OUTCOME_INVALID")
+    effect_identity = _optional_text(effect.get("effect_identity"), "effect_identity")
+    operation_id = _optional_text(effect.get("operation_id"), "operation_id")
+
+    receipt_wrapper = provenance.get("observation_receipt")
+    receipt_payload: Mapping[str, Any] | None = None
+    if receipt_wrapper is not None:
+        if not isinstance(receipt_wrapper, Mapping) or set(receipt_wrapper) != {
+            "payload",
+            "payload_hash",
+        }:
+            raise ValueError("EVIDENCE_ORIGIN_RECEIPT_INVALID")
+        payload = receipt_wrapper.get("payload")
+        if not isinstance(payload, Mapping):
+            raise ValueError("EVIDENCE_ORIGIN_RECEIPT_INVALID")
+        if receipt_wrapper.get("payload_hash") != _hash(dict(payload)):
+            raise ValueError("EVIDENCE_ORIGIN_RECEIPT_HASH_MISMATCH")
+        receipt_payload = payload
+
+    expected_claim_ceiling = (
+        "evidence-origin provenance only; external receipt authenticity and "
+        "provider/model success claims require the owning producer gate"
+    )
+    if provenance.get("claim_ceiling") != expected_claim_ceiling:
+        raise ValueError("EVIDENCE_ORIGIN_CLAIM_CEILING_TAMPERED")
+    binding_payload = dict(provenance)
+    supplied_binding_hash = binding_payload.pop("binding_hash", None)
+    if supplied_binding_hash != _hash(binding_payload):
+        raise ValueError("EVIDENCE_ORIGIN_BINDING_HASH_MISMATCH")
+
+    if origin in {SIMULATION_ONLY, MOCK_TRANSPORT, LOCAL_FAKE_PROVIDER}:
+        if effect.get("started") is not False:
+            raise ValueError("EVIDENCE_ORIGIN_NONPHYSICAL_EXTERNAL_EFFECT_FORBIDDEN")
+        return
+
+    if origin not in {PHYSICAL_LOCAL_MODEL, REMOTE_PROVIDER_OBSERVED}:
+        return
+
+    if effect.get("started") is not True:
+        raise ValueError("EVIDENCE_ORIGIN_PHYSICAL_EFFECT_NOT_STARTED")
+    if not effect_identity or not operation_id:
+        raise ValueError("EVIDENCE_ORIGIN_PHYSICAL_EFFECT_IDENTITY_MISSING")
+    if receipt_payload is None:
+        raise ValueError("EVIDENCE_ORIGIN_PHYSICAL_RECEIPT_MISSING")
+
+    receipt_effect = _optional_text(
+        receipt_payload.get("effect_identity"), "receipt_effect_identity"
+    )
+    receipt_operation = _optional_text(
+        receipt_payload.get("operation_id"), "receipt_operation_id"
+    )
+    if receipt_effect != effect_identity or receipt_operation != operation_id:
+        raise ValueError("EVIDENCE_ORIGIN_RECEIPT_EFFECT_IDENTITY_MISMATCH")
+    if receipt_payload.get("external_effect_started") is not True:
+        raise ValueError("EVIDENCE_ORIGIN_RECEIPT_EFFECT_NOT_STARTED")
+    if str(receipt_payload.get("outcome") or "").upper() != outcome:
+        raise ValueError("EVIDENCE_ORIGIN_RECEIPT_OUTCOME_MISMATCH")
+    if _optional_text(receipt_payload.get("source_receipt_ref"), "source_receipt_ref") is None:
+        raise ValueError("EVIDENCE_ORIGIN_SOURCE_RECEIPT_REF_MISSING")
+    if not _sha256_ref(receipt_payload.get("source_receipt_sha256")):
+        raise ValueError("EVIDENCE_ORIGIN_SOURCE_RECEIPT_HASH_INVALID")
+
+    transport_class = str(receipt_payload.get("transport_class") or "").upper()
+    if origin == PHYSICAL_LOCAL_MODEL:
+        if transport_class != "LOCAL_MODEL":
+            raise ValueError("EVIDENCE_ORIGIN_LOCAL_TRANSPORT_MISMATCH")
+        if not observed["model"]:
+            raise ValueError("EVIDENCE_ORIGIN_LOCAL_OBSERVED_MODEL_MISSING")
+        if (
+            _optional_text(receipt_payload.get("observed_model"), "receipt_observed_model")
+            != observed["model"]
+        ):
+            raise ValueError("EVIDENCE_ORIGIN_RECEIPT_MODEL_MISMATCH")
+        return
+
+    if transport_class != "REMOTE_PROVIDER":
+        raise ValueError("EVIDENCE_ORIGIN_REMOTE_TRANSPORT_MISMATCH")
+    if not observed["provider"] or not observed["model"]:
+        raise ValueError("EVIDENCE_ORIGIN_REMOTE_OBSERVED_IDENTITY_MISSING")
+    if (
+        _optional_text(receipt_payload.get("observed_provider"), "receipt_observed_provider")
+        != observed["provider"]
+    ):
+        raise ValueError("EVIDENCE_ORIGIN_RECEIPT_PROVIDER_MISMATCH")
+    if (
+        _optional_text(receipt_payload.get("observed_model"), "receipt_observed_model")
+        != observed["model"]
+    ):
+        raise ValueError("EVIDENCE_ORIGIN_RECEIPT_MODEL_MISMATCH")
+    receipt_revision = _optional_text(
+        receipt_payload.get("observed_revision"), "receipt_observed_revision"
+    )
+    if receipt_revision != observed["revision"]:
+        raise ValueError("EVIDENCE_ORIGIN_RECEIPT_REVISION_MISMATCH")
+
+
+def require_remote_provider_observation(value: Any) -> dict[str, Any]:
+    """Return provenance only for a successful physical remote observation."""
+    provenance = value
+    if isinstance(value, Mapping) and value.get("schema") == EXPERIMENT_INTEGRITY_SCHEMA:
+        provenance = value.get("evidence_origin")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("LIVE_PROVIDER_PROVENANCE_MISSING")
+    validate_evidence_origin_provenance(provenance)
+    if provenance.get("origin_class") != REMOTE_PROVIDER_OBSERVED:
+        raise ValueError("LIVE_PROVIDER_REMOTE_OBSERVATION_REQUIRED")
+    effect = provenance["external_effect"]
+    if effect.get("outcome") != EFFECT_SUCCEEDED:
+        raise ValueError("LIVE_PROVIDER_SUCCESSFUL_OUTCOME_REQUIRED")
+    return dict(provenance)
 
 
 def _member_identity(member: Mapping[str, Any], independence_unit: str) -> str:
@@ -125,6 +392,7 @@ def build_experiment_integrity(
     insufficient_calibration_reasons: list[str] | tuple[str, ...] = (),
     reject_all_policy: Mapping[str, Any] | None = None,
     negative_terminal: bool = False,
+    evidence_origin: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind one experiment's populations, frozen policy, and terminal evidence."""
     if independence_unit not in _INDEPENDENCE_UNITS:
@@ -220,6 +488,9 @@ def build_experiment_integrity(
         "reject_all_policy": dict(reject_all_policy) if reject_all_policy is not None else None,
         "claim_ceiling": "experiment-integrity evidence only; no model/route/production claim",
     }
+    if evidence_origin is not None:
+        validate_evidence_origin_provenance(evidence_origin)
+        integrity["evidence_origin"] = dict(evidence_origin)
     validate_experiment_integrity(integrity)
     return integrity
 
@@ -232,6 +503,8 @@ def validate_experiment_integrity(integrity: Any) -> None:
         raise ValueError("EXPERIMENT_INTEGRITY_SCHEMA_INVALID")
     if not str(integrity.get("experiment_id") or "").strip():
         raise ValueError("EXPERIMENT_IDENTITY_MISSING")
+    if "evidence_origin" in integrity:
+        validate_evidence_origin_provenance(integrity.get("evidence_origin"))
 
     independence_unit = integrity.get("independence_unit")
     if independence_unit not in _INDEPENDENCE_UNITS:
