@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-
 import pytest
 
 from nexus_learning.effectiveness_measurement import compare_workflows_at_required_quality
@@ -19,9 +17,9 @@ from nexus_learning.necessary_condition_stop import (
     BOUND_UNKNOWN,
     BOUND_UPPER,
     CONTINUE,
-    NEGATIVE_STOP,
     NECESSARY_CONDITION_STOP_CLAIM_CEILING,
     NECESSARY_CONDITION_STOP_SCHEMA,
+    NEGATIVE_STOP,
     NecessaryConditionStopError,
     build_necessary_condition_stop_evidence,
     validate_necessary_condition_stop_evidence,
