@@ -18,15 +18,26 @@ from nexus_learning.contracts import (
 )
 from nexus_learning.experiment_integrity import (
     CALIBRATED,
+    EFFECT_OUTCOME_UNKNOWN,
+    EFFECT_SUCCEEDED,
     FROZEN_REJECT_ALL,
     INDEPENDENCE_UNIT_BASE,
     INDEPENDENCE_UNIT_ROW,
     INSUFFICIENT_CALIBRATION,
+    LOCAL_FAKE_PROVIDER,
+    MOCK_TRANSPORT,
+    PHYSICAL_LOCAL_MODEL,
+    REMOTE_PROVIDER_OBSERVED,
+    SIMULATION_ONLY,
     TERMINAL_DEFER,
     TERMINAL_NEGATIVE,
     TERMINAL_PASS,
     TERMINAL_STOP,
+    UNKNOWN_ORIGIN,
+    build_evidence_origin_provenance,
     build_experiment_integrity,
+    require_remote_provider_observation,
+    validate_evidence_origin_provenance,
     validate_experiment_integrity,
 )
 
@@ -507,3 +518,210 @@ def test_policy_derivation_reference_is_cross_bound():
     integrity["policy_derivation"]["policy_derivation_ref"] = "calibration_analysis:other"
     with pytest.raises(ValueError, match="EXPERIMENT_POLICY_DERIVATION_REF_MISMATCH"):
         validate_experiment_integrity(integrity)
+
+
+def _physical_observation_receipt(
+    *,
+    transport_class: str = "REMOTE_PROVIDER",
+    outcome: str = EFFECT_SUCCEEDED,
+    provider: str | None = "jev",
+    model: str = "jev-latest",
+    revision: str | None = "jev-physical-r1",
+) -> dict:
+    return {
+        "receipt_id": "receipt:provider:1",
+        "effect_identity": "effect:provider:1",
+        "operation_id": "operation:provider:1",
+        "transport_class": transport_class,
+        "external_effect_started": True,
+        "outcome": outcome,
+        "observed_provider": provider,
+        "observed_model": model,
+        "observed_revision": revision,
+        "source_receipt_ref": "provider-journal:entry:1",
+        "source_receipt_sha256": "sha256:" + ("a" * 64),
+    }
+
+
+def test_configured_jev_identity_does_not_self_prove_observed_execution():
+    provenance = build_evidence_origin_provenance(
+        origin_class=UNKNOWN_ORIGIN,
+        requested_provider="jev",
+        requested_model="jev-latest",
+        configured_provider="jev",
+        configured_model="jev-latest",
+    )
+    assert provenance["configured_identity"]["model"] == "jev-latest"
+    assert provenance["observed_identity"]["model"] is None
+    with pytest.raises(ValueError, match="LIVE_PROVIDER_REMOTE_OBSERVATION_REQUIRED"):
+        require_remote_provider_observation(provenance)
+
+
+def test_localhost_mock_self_declared_model_cannot_satisfy_remote_live_gate():
+    provenance = build_evidence_origin_provenance(
+        origin_class=MOCK_TRANSPORT,
+        requested_provider="jev",
+        configured_provider="jev",
+        configured_model="jev-latest",
+        observation_receipt={
+            "transport": "http://127.0.0.1:8123",
+            "response": {"model": "jev-latest"},
+        },
+    )
+    validate_evidence_origin_provenance(provenance)
+    with pytest.raises(ValueError, match="LIVE_PROVIDER_REMOTE_OBSERVATION_REQUIRED"):
+        require_remote_provider_observation(provenance)
+
+
+def test_simulation_and_local_fake_provider_remain_nonphysical():
+    for origin in (SIMULATION_ONLY, LOCAL_FAKE_PROVIDER):
+        provenance = build_evidence_origin_provenance(
+            origin_class=origin,
+            configured_model="jev-latest",
+        )
+        assert provenance["external_effect"]["started"] is False
+        with pytest.raises(ValueError, match="LIVE_PROVIDER_REMOTE_OBSERVATION_REQUIRED"):
+            require_remote_provider_observation(provenance)
+
+
+def test_physical_local_model_is_distinct_from_remote_provider_observation():
+    receipt = _physical_observation_receipt(
+        transport_class="LOCAL_MODEL",
+        provider=None,
+        model="mlx-qwen-local",
+        revision=None,
+    )
+    provenance = build_evidence_origin_provenance(
+        origin_class=PHYSICAL_LOCAL_MODEL,
+        configured_model="mlx-qwen-local",
+        observed_model="mlx-qwen-local",
+        external_effect_started=True,
+        effect_outcome=EFFECT_SUCCEEDED,
+        effect_identity=receipt["effect_identity"],
+        operation_id=receipt["operation_id"],
+        observation_receipt=receipt,
+    )
+    validate_evidence_origin_provenance(provenance)
+    with pytest.raises(ValueError, match="LIVE_PROVIDER_REMOTE_OBSERVATION_REQUIRED"):
+        require_remote_provider_observation(provenance)
+
+
+def test_physical_remote_provider_with_bound_receipt_satisfies_live_gate():
+    receipt = _physical_observation_receipt()
+    provenance = build_evidence_origin_provenance(
+        origin_class=REMOTE_PROVIDER_OBSERVED,
+        requested_provider="jev",
+        requested_model="jev-latest",
+        configured_provider="jev",
+        configured_model="jev-latest",
+        observed_provider="jev",
+        observed_model="jev-latest",
+        observed_revision="jev-physical-r1",
+        external_effect_started=True,
+        effect_outcome=EFFECT_SUCCEEDED,
+        effect_identity=receipt["effect_identity"],
+        operation_id=receipt["operation_id"],
+        observation_receipt=receipt,
+    )
+    proven = require_remote_provider_observation(provenance)
+    assert proven["origin_class"] == REMOTE_PROVIDER_OBSERVED
+    assert proven["observed_identity"]["model"] == "jev-latest"
+
+
+def test_remote_observed_model_missing_is_not_filled_from_configured_model():
+    receipt = _physical_observation_receipt()
+    with pytest.raises(ValueError, match="EVIDENCE_ORIGIN_REMOTE_OBSERVED_IDENTITY_MISSING"):
+        build_evidence_origin_provenance(
+            origin_class=REMOTE_PROVIDER_OBSERVED,
+            configured_provider="jev",
+            configured_model="jev-latest",
+            observed_provider="jev",
+            observed_model=None,
+            observed_revision="jev-physical-r1",
+            external_effect_started=True,
+            effect_outcome=EFFECT_SUCCEEDED,
+            effect_identity=receipt["effect_identity"],
+            operation_id=receipt["operation_id"],
+            observation_receipt=receipt,
+        )
+
+
+def test_remote_outcome_unknown_cannot_be_promoted_to_successful_live_observation():
+    receipt = _physical_observation_receipt(outcome=EFFECT_OUTCOME_UNKNOWN)
+    provenance = build_evidence_origin_provenance(
+        origin_class=REMOTE_PROVIDER_OBSERVED,
+        configured_provider="jev",
+        configured_model="jev-latest",
+        observed_provider="jev",
+        observed_model="jev-latest",
+        observed_revision="jev-physical-r1",
+        external_effect_started=True,
+        effect_outcome=EFFECT_OUTCOME_UNKNOWN,
+        effect_identity=receipt["effect_identity"],
+        operation_id=receipt["operation_id"],
+        observation_receipt=receipt,
+    )
+    validate_evidence_origin_provenance(provenance)
+    with pytest.raises(ValueError, match="LIVE_PROVIDER_SUCCESSFUL_OUTCOME_REQUIRED"):
+        require_remote_provider_observation(provenance)
+
+
+def test_tampered_physical_receipt_fails_closed():
+    receipt = _physical_observation_receipt()
+    provenance = build_evidence_origin_provenance(
+        origin_class=REMOTE_PROVIDER_OBSERVED,
+        observed_provider="jev",
+        observed_model="jev-latest",
+        observed_revision="jev-physical-r1",
+        external_effect_started=True,
+        effect_outcome=EFFECT_SUCCEEDED,
+        effect_identity=receipt["effect_identity"],
+        operation_id=receipt["operation_id"],
+        observation_receipt=receipt,
+    )
+    provenance["observation_receipt"]["payload"]["operation_id"] = "operation:substituted"
+    with pytest.raises(ValueError, match="EVIDENCE_ORIGIN_RECEIPT_HASH_MISMATCH"):
+        validate_evidence_origin_provenance(provenance)
+
+
+def test_experiment_can_bind_remote_provenance_without_breaking_legacy_artifacts():
+    calibration, heldout = _cal_heldout()
+    legacy = build_experiment_integrity(
+        experiment_id="exp:legacy-no-origin",
+        calibration_members=calibration,
+        heldout_members=heldout,
+        independence_unit=INDEPENDENCE_UNIT_ROW,
+        policy_derivation_ref="calibration_analysis:legacy",
+        frozen_policy=_frozen_policy(),
+        freeze_generation=1,
+        heldout_evaluation_start_generation=2,
+    )
+    assert "evidence_origin" not in legacy
+    validate_experiment_integrity(legacy)
+    with pytest.raises(ValueError, match="LIVE_PROVIDER_PROVENANCE_MISSING"):
+        require_remote_provider_observation(legacy)
+
+    receipt = _physical_observation_receipt()
+    provenance = build_evidence_origin_provenance(
+        origin_class=REMOTE_PROVIDER_OBSERVED,
+        observed_provider="jev",
+        observed_model="jev-latest",
+        observed_revision="jev-physical-r1",
+        external_effect_started=True,
+        effect_outcome=EFFECT_SUCCEEDED,
+        effect_identity=receipt["effect_identity"],
+        operation_id=receipt["operation_id"],
+        observation_receipt=receipt,
+    )
+    bound = build_experiment_integrity(
+        experiment_id="exp:remote-origin-bound",
+        calibration_members=calibration,
+        heldout_members=heldout,
+        independence_unit=INDEPENDENCE_UNIT_ROW,
+        policy_derivation_ref="calibration_analysis:origin",
+        frozen_policy=_frozen_policy(),
+        freeze_generation=1,
+        heldout_evaluation_start_generation=2,
+        evidence_origin=provenance,
+    )
+    assert require_remote_provider_observation(bound)["binding_hash"] == provenance["binding_hash"]
