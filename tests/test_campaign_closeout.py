@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+
+import pytest
 
 from nexus_learning.campaign_closeout import (
     CAMPAIGN_COMPLETE,
@@ -32,7 +36,7 @@ HASH_A = "sha256:" + "a" * 64
 HASH_B = "sha256:" + "b" * 64
 
 
-def _preflight(experiment_id):
+def _preflight(experiment_id, **overrides):
     dimensions = {
         name: {"status": COMPARATOR_MATCHED, "value": {"frozen": True}, "evidence_hash": HASH_A}
         for name in (
@@ -79,20 +83,27 @@ def _preflight(experiment_id):
         heldout_evaluation_start_generation=2,
         calibration_status=CALIBRATED,
     )
-    return build_cohort_preflight(
-        experiment_id=experiment_id,
-        cases=cases,
-        independence_unit=INDEPENDENCE_UNIT_ROW,
-        value_claim=True,
-        ground_truth_provenance={"source": "truth:v1", "sha256": HASH_A},
-        leakage_observation={"status": "PASS", "evaluator": "audit:v1", "evidence_hash": HASH_B},
-        incumbent={"identity": "incumbent:v1"},
-        comparator_preflight=comparator,
-        resource_observation=resource,
-        resource_stop_policy={"stop_on_resource_failure": True},
-        hard_gates=gates,
-        experiment_integrity=integrity,
-    )
+    args = {
+        "experiment_id": experiment_id,
+        "cases": cases,
+        "independence_unit": INDEPENDENCE_UNIT_ROW,
+        "value_claim": True,
+        "ground_truth_provenance": {"source": "truth:v1", "sha256": HASH_A},
+        "leakage_observation": {"status": "PASS", "evaluator": "audit:v1", "evidence_hash": HASH_B},
+        "incumbent": {"identity": "incumbent:v1"},
+        "comparator_preflight": comparator,
+        "resource_observation": resource,
+        "resource_stop_policy": {"stop_on_resource_failure": True},
+        "hard_gates": gates,
+        "experiment_integrity": integrity,
+    }
+    args.update(overrides)
+    return build_cohort_preflight(**args)
+
+
+def _delta(changes):
+    raw = json.dumps(changes, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return {"changes": changes, "evidence_hash": "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()}
 
 
 def _stage_complete(preflight):
@@ -210,7 +221,7 @@ def test_rejected_experiment_remains_terminal_after_session_restart_and_reopens_
     reopened = evaluate_reopen_trigger(
         record,
         experiment_id="exp:occamy",
-        evidence_delta={"changes": {"runtime.revision": "runtime-r2"}, "evidence_hash": HASH_B},
+        evidence_delta=_delta({"runtime": {"revision": "runtime-r2"}}),
         proposed_experiment_generation=2,
     )
     assert reopened["eligible"] is True
@@ -224,11 +235,23 @@ def test_unrelated_delta_does_not_reopen_closed_experiment():
     reopened = evaluate_reopen_trigger(
         record,
         experiment_id="exp:occamy",
-        evidence_delta={"changes": {"unrelated.docs": "updated"}, "evidence_hash": HASH_B},
+        evidence_delta=_delta({"unrelated": {"docs": "updated"}}),
         proposed_experiment_generation=2,
     )
     assert reopened["eligible"] is False
     assert reopened["matched_trigger_id"] is None
+
+
+def test_reopen_delta_hash_must_bind_the_exact_change_payload():
+    record = _closeout(experiments=[_reference("exp:occamy", disposition="CLOSE_FOR_NOW")])
+    changes = {"runtime": {"revision": "runtime-r2"}}
+    with pytest.raises(ValueError, match="DELTA_EVIDENCE_INVALID"):
+        evaluate_reopen_trigger(
+            record,
+            experiment_id="exp:occamy",
+            evidence_delta={"changes": changes, "evidence_hash": HASH_B},
+            proposed_experiment_generation=2,
+        )
 
 
 def test_owner_decision_must_match_recorded_reference_and_hash():
@@ -274,6 +297,26 @@ def test_missing_terminal_receipt_produces_explicit_incomplete_closeout():
     assert record["campaign_closed"] is False
     assert any("run_not_terminal" in reason for reason in record["incomplete_reasons"])
     assert any("result_receipt_missing" in reason for reason in record["incomplete_reasons"])
+
+
+def test_deferred_staged_gate_cannot_close_campaign_as_complete():
+    preflight = _preflight("exp:deferred", leakage_observation=None)
+    stage = build_staged_gate_evidence(preflight=preflight)
+    assert stage["stage"] == "DEFER"
+    assert stage["terminal"] is False
+    deferred = {
+        "experiment_ref": "ref:deferred",
+        "run_evidence": _run("exp:deferred", preflight),
+        "preflight_evidence": preflight,
+        "staged_gate_evidence": stage,
+        "disposition": "DEFER",
+        "highest_safe_claim": "cohort identity only",
+        "not_proven": ["leakage check"],
+    }
+    record = _closeout(experiments=[deferred], triggers=[])
+    assert record["completion_status"] == CAMPAIGN_INCOMPLETE
+    assert record["campaign_closed"] is False
+    assert any("staged_gate_not_terminal" in reason for reason in record["incomplete_reasons"])
 
 
 def test_closeout_tampering_fails_binding():

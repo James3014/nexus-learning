@@ -41,6 +41,7 @@ RECORD_TERMINAL_FAILURE = "RECORD_TERMINAL_FAILURE"
 NO_EFFECT_OBSERVED = "NO_EFFECT_OBSERVED"
 GENERATION_IDENTITY_MISMATCH = "GENERATION_IDENTITY_MISMATCH"
 EFFECT_IDENTITY_CONFLICT = "EFFECT_IDENTITY_CONFLICT"
+TERMINAL_STATE_CONFLICT = "TERMINAL_STATE_CONFLICT"
 
 
 def _canonical_hash(value: Any) -> str:
@@ -323,8 +324,28 @@ def validate_experiment_run_identity(run: Any) -> dict[str, Any]:
         for identity_field in ("effect_identity", "operation_id"):
             run_identity = run.get(identity_field)
             provenance_identity = effect.get(identity_field)
+            if effect.get("started") is True and (
+                not run_identity or not provenance_identity
+            ):
+                raise ValueError("RUN_IDENTITY_EVIDENCE_ORIGIN_EFFECT_IDENTITY_MISSING")
             if run_identity is not None and provenance_identity is not None and run_identity != provenance_identity:
                 raise ValueError(f"RUN_IDENTITY_EVIDENCE_ORIGIN_{identity_field.upper()}_MISMATCH")
+        identity_pairs = (
+            ("requested_execution_identity", "requested_identity"),
+            ("configured_execution_identity", "configured_identity"),
+            ("observed_execution_identity", "observed_identity"),
+        )
+        for run_field, provenance_field in identity_pairs:
+            run_identity = run[run_field]
+            provenance_identity = provenance[provenance_field]
+            for identity_field in ("provider", "model", "revision"):
+                run_value = run_identity.get(identity_field)
+                provenance_value = provenance_identity.get(identity_field)
+                if run_value is not None and provenance_value is not None and run_value != provenance_value:
+                    raise ValueError(
+                        f"RUN_IDENTITY_EVIDENCE_ORIGIN_{provenance_field.upper()}_"
+                        f"{identity_field.upper()}_MISMATCH"
+                    )
         if provenance.get("origin_class") in {PHYSICAL_LOCAL_MODEL, REMOTE_PROVIDER_OBSERVED}:
             expected_outcomes = {
                 NOT_STARTED: {EFFECT_NOT_STARTED},
@@ -384,10 +405,34 @@ def classify_run_observation(
             "new_effect_authorized": False,
             "claim_ceiling": EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING,
         }
+    old_state = old["observed_state"]
     state = new["observed_state"]
+    terminal_states = {COMPLETE, FAILED}
+    if old_state in terminal_states:
+        terminal_identity = (
+            old_state == state
+            and old.get("result_artifact") == new.get("result_artifact")
+            and old.get("producer_run_id") == new.get("producer_run_id")
+            and old.get("effect_identity") == new.get("effect_identity")
+            and old.get("operation_id") == new.get("operation_id")
+            and old.get("observed_execution_identity") == new.get("observed_execution_identity")
+            and old.get("evidence_origin_provenance") == new.get("evidence_origin_provenance")
+        )
+        if not terminal_identity:
+            return {
+                "classification": TERMINAL_STATE_CONFLICT,
+                "requirement": "RECONCILE_WITH_EFFECT_OWNER",
+                "retry_authorized": False,
+                "new_effect_authorized": False,
+                "claim_ceiling": EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING,
+            }
+    if old_state in {RUNNING, OUTCOME_UNKNOWN} and state == NOT_STARTED:
+        # A missing process/session observation cannot erase a prior unresolved
+        # external effect. Keep the strongest previously observed requirement.
+        state = old_state
     return {
         "classification": state,
-        "requirement": new["reconciliation_requirement"],
+        "requirement": _expected_requirement(state),
         "retry_authorized": False,
         "new_effect_authorized": False,
         "claim_ceiling": EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING,

@@ -31,9 +31,12 @@ known leakage, and frozen-gate resource failures become `FAIL`.
 Comparator observations cover sampling fields, reasoning mode, context/prefill,
 cache semantics, concurrency/admission, and material runtime settings. Frozen
 compatibility amendments are required when a requested field is rejected.
-Pairwise comparator validation detects changed settings before receipts are
-combined. Unmatched cache/runtime semantics cap comparison scope at
-`WHOLE_RUNTIME_STACK_ONLY`.
+Pairwise comparator validation rejects unobserved or core-method differences
+before receipts are combined. Explicitly observed cache/runtime differences cap
+the comparison scope at
+`WHOLE_RUNTIME_STACK_ONLY`; the workflow may evaluate that scope only when all
+non-stack dimensions are explicitly matched and every dimension was observed.
+This scope does not claim isolated cache, runtime, or scheduler parity.
 
 Resource receipts retain each measured concurrency level, headroom observation,
 admission state, errors, and recovery. A pre-registered stop rule records higher
@@ -44,6 +47,11 @@ reason.
 `build_staged_gate_evidence` advances only through preflight, smoke, calibration,
 and then holdout eligibility. A pre-registered hard-gate failure yields a
 terminal `STOP` before holdout; later evidence cannot rewrite that result.
+`DEFER` remains resumable: incomplete preflight may be superseded only by
+complete evidence with the same experiment, cohort, frozen policy, and gates;
+an incomplete stage observation may be superseded by a new bound observation,
+while the earlier deferred receipt remains in history. Deferred evidence cannot
+close a campaign.
 Necessary-condition negative-stop evidence is validated through #26. Quality
 gates remain upstream of the existing #22 economics comparison.
 
@@ -63,4 +71,6 @@ are carried into `not_proven` automatically where applicable.
 Reopen evaluation requires a matching, named material-delta trigger or an exact
 owner-decision reference and hash. It requires a higher experiment generation
 and returns the previous closeout and receipt hashes so the historical record
-remains unchanged. It never schedules or starts the new experiment.
+remains unchanged. Material-delta evidence hashes bind the canonical `changes`
+mapping, and dot-separated trigger paths traverse nested mappings. It never
+schedules or starts the new experiment.

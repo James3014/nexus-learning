@@ -13,10 +13,12 @@ from nexus_learning.experiment_integrity import (
 )
 from nexus_learning.experiment_run_identity import (
     COMPLETE,
+    NOT_STARTED,
     OBSERVE_SAME_RUN,
     OUTCOME_UNKNOWN,
     RECONCILE_WITH_EFFECT_OWNER,
     RUNNING,
+    TERMINAL_STATE_CONFLICT,
     build_experiment_run_identity,
     classify_run_observation,
     validate_experiment_run_identity,
@@ -71,6 +73,38 @@ def test_outcome_unknown_requires_external_effect_reconciliation_and_never_autho
     result = classify_run_observation(previous, current)
     assert result["requirement"] == RECONCILE_WITH_EFFECT_OWNER
     assert result["retry_authorized"] is False
+
+
+@pytest.mark.parametrize(
+    ("old_state", "requirement"),
+    [(RUNNING, OBSERVE_SAME_RUN), (OUTCOME_UNKNOWN, RECONCILE_WITH_EFFECT_OWNER)],
+)
+def test_missing_local_session_does_not_regress_unresolved_run_to_not_started(old_state, requirement):
+    previous = _run(observed_state=old_state)
+    current = _run(observed_state=NOT_STARTED, started_at=None,
+                   last_observed_at="2026-09-29T10:05:00Z")
+    result = classify_run_observation(previous, current)
+    assert result["classification"] == old_state
+    assert result["requirement"] == requirement
+    assert result["retry_authorized"] is False
+    assert result["new_effect_authorized"] is False
+
+
+def test_terminal_run_state_and_result_receipt_cannot_be_rewritten_by_later_observation():
+    completed = _run(
+        observed_state=COMPLETE,
+        result_artifact={"artifact_id": "receipt:one", "sha256": HASH_B},
+    )
+    changed_receipt = _run(
+        observed_state=COMPLETE,
+        result_artifact={"artifact_id": "receipt:one", "sha256": HASH_A},
+    )
+    regressed = _run(observed_state=RUNNING)
+    for current in (changed_receipt, regressed):
+        result = classify_run_observation(completed, current)
+        assert result["classification"] == TERMINAL_STATE_CONFLICT
+        assert result["retry_authorized"] is False
+        assert result["new_effect_authorized"] is False
 
 
 def test_terminal_result_requires_and_binds_artifact_identity_and_hash():
@@ -160,6 +194,65 @@ def test_remote_observed_provenance_remains_compatible():
     run = _run(
         observed_state=COMPLETE,
         result_artifact={"artifact_id": "result:remote", "sha256": HASH_B},
+        requested_execution_identity={
+            "provider": "requested-provider", "model": "requested-model", "runtime": "r", "revision": None
+        },
+        configured_execution_identity={
+            "provider": "configured-provider", "model": "configured-model", "runtime": "r", "revision": None
+        },
+        observed_execution_identity={
+            "provider": "observed-provider", "model": "observed-model", "runtime": "r", "revision": "revision-1"
+        },
         evidence_origin_provenance=provenance,
     )
     assert run["evidence_origin_provenance"]["observed_identity"]["model"] == "observed-model"
+
+
+def test_physical_effect_identity_is_required_on_the_run_projection_when_provenance_is_present():
+    provenance = build_evidence_origin_provenance(
+        origin_class=REMOTE_PROVIDER_OBSERVED,
+        requested_provider="requested-provider",
+        requested_model="requested-model",
+        configured_provider="configured-provider",
+        configured_model="configured-model",
+        observed_provider="observed-provider",
+        observed_model="observed-model",
+        observed_revision="revision-1",
+        external_effect_started=True,
+        effect_outcome=EFFECT_SUCCEEDED,
+        effect_identity="effect-1",
+        operation_id="op-1",
+        observation_receipt={
+            "effect_identity": "effect-1", "operation_id": "op-1",
+            "external_effect_started": True, "outcome": EFFECT_SUCCEEDED,
+            "source_receipt_ref": "receipt://remote/1", "source_receipt_sha256": HASH_A,
+            "transport_class": "REMOTE_PROVIDER", "observed_provider": "observed-provider",
+            "observed_model": "observed-model", "observed_revision": "revision-1",
+        },
+    )
+    with pytest.raises(ValueError, match="EVIDENCE_ORIGIN_EFFECT_IDENTITY_MISSING"):
+        _run(
+            observed_state=COMPLETE,
+            result_artifact={"artifact_id": "result:remote", "sha256": HASH_B},
+            effect_identity=None,
+            operation_id=None,
+            evidence_origin_provenance=provenance,
+        )
+
+
+def test_run_provider_identity_cannot_conflict_with_issue_27_provenance():
+    provenance = build_evidence_origin_provenance(
+        origin_class=SIMULATION_ONLY,
+        requested_provider="p",
+        requested_model="m",
+        configured_provider="p",
+        configured_model="m",
+        external_effect_started=False,
+    )
+    with pytest.raises(ValueError, match="CONFIGURED_IDENTITY_PROVIDER_MISMATCH"):
+        _run(
+            configured_execution_identity={
+                "provider": "other", "model": "m", "runtime": "r", "revision": "rev1"
+            },
+            evidence_origin_provenance=provenance,
+        )

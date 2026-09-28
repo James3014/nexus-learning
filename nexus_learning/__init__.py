@@ -102,6 +102,7 @@ from nexus_learning.experiment_run_identity import (
 from nexus_learning.experiment_run_identity import (
     EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING,
     EXPERIMENT_RUN_IDENTITY_SCHEMA,
+    TERMINAL_STATE_CONFLICT,
     build_experiment_run_identity,
     classify_run_observation,
     validate_experiment_run_identity,
@@ -227,6 +228,7 @@ __all__ = [
     "RUN_COMPLETE",
     "RUN_FAILED",
     "RUN_OUTCOME_UNKNOWN",
+    "TERMINAL_STATE_CONFLICT",
     "build_experiment_run_identity",
     "validate_experiment_run_identity",
     "classify_run_observation",

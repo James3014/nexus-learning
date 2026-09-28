@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Literal, Mapping, Sequence, overload
 
 from .experiment_preflight import (
+    PREFLIGHT_DEFER,
     STAGE_DEFER,
     STAGE_HARD_STOP,
     STAGE_HOLDOUT_COMPLETE,
@@ -45,6 +46,12 @@ def _hash(value: Any) -> str:
 def _is_hash(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 71 and value.startswith("sha256:") and all(
         c in "0123456789abcdef" for c in value[7:]
+    )
+
+
+def _is_sha256_digest(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        c in "0123456789abcdef" for c in value
     )
 
 
@@ -88,6 +95,8 @@ def _normalize_trigger(raw: Mapping[str, Any]) -> dict[str, Any]:
     trigger_type = _text(raw.get("trigger_type"), "trigger_type")
     if trigger_type == MATERIAL_DELTA:
         path = _text(raw.get("field_path"), "trigger_field_path")
+        if path.startswith(".") or path.endswith(".") or any(not part for part in path.split(".")):
+            raise ValueError("CAMPAIGN_REOPEN_TRIGGER_FIELD_PATH_INVALID")
         expected = raw.get("expected_value")
         rationale = _text(raw.get("materiality_rationale"), "trigger_materiality_rationale")
         if expected is None:
@@ -107,12 +116,25 @@ def _normalize_trigger(raw: Mapping[str, Any]) -> dict[str, Any]:
     raise ValueError("CAMPAIGN_REOPEN_TRIGGER_TYPE_INVALID")
 
 
+def _read_field_path(value: Any, field_path: str) -> Any:
+    current = value
+    for part in field_path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return _MISSING
+        current = current[part]
+    return current
+
+
+_MISSING = object()
+
+
 def _project_experiment_ref(raw: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(raw, Mapping):
         raise ValueError("CAMPAIGN_EXPERIMENT_REF_INVALID")
     ref_id = _text(raw.get("experiment_ref"), "experiment_ref")
     missing: list[str] = []
     result: dict[str, Any] = {"experiment_ref": ref_id}
+    preflight_deferred_terminal_stop = False
     run_raw = raw.get("run_evidence")
     if run_raw is None:
         missing.append(f"{ref_id}:run_identity_evidence_missing")
@@ -156,12 +178,23 @@ def _project_experiment_ref(raw: Mapping[str, Any]) -> tuple[dict[str, Any], lis
         result["staged_gate_binding_hash"] = stage["binding_hash"]
         result["staged_gate_stage"] = stage["stage"]
         result["staged_gate_terminal"] = stage["terminal"]
-        if stage["terminal"] is not True or stage["stage"] not in {
-            STAGE_STOP, STAGE_HARD_STOP, STAGE_DEFER, STAGE_HOLDOUT_COMPLETE
+        result["necessary_condition_stop_binding_hash"] = stage.get(
+            "necessary_condition_stop_binding_hash"
+        )
+        if stage["terminal"] is not True or stage["stage"] == STAGE_DEFER or stage["stage"] not in {
+            STAGE_STOP, STAGE_HARD_STOP, STAGE_HOLDOUT_COMPLETE
         }:
             missing.append(f"{ref_id}:staged_gate_not_terminal")
     if preflight is not None:
         result["preflight_disposition"] = preflight["preflight_disposition"]
+        if preflight["preflight_disposition"] == PREFLIGHT_DEFER:
+            preflight_deferred_terminal_stop = bool(
+                stage is not None
+                and stage["stage"] == STAGE_HARD_STOP
+                and _is_sha256_digest(stage.get("necessary_condition_stop_binding_hash"))
+            )
+            if not preflight_deferred_terminal_stop:
+                missing.append(f"{ref_id}:preflight_deferred")
     if run is not None and preflight is not None and run["experiment_id"] != preflight["experiment_id"]:
         raise ValueError("CAMPAIGN_RUN_PREFLIGHT_EXPERIMENT_MISMATCH")
     if run is not None and preflight is not None:
@@ -203,6 +236,8 @@ def _project_experiment_ref(raw: Mapping[str, Any]) -> tuple[dict[str, Any], lis
             raise ValueError("CAMPAIGN_CORRECTNESS_CERTIFICATION_HASH_INVALID")
     if correctness["status"] != "PASS":
         not_proven_list.append("formal correctness certification")
+    if preflight_deferred_terminal_stop:
+        not_proven_list.append("full preflight readiness before #26 terminal negative stop")
     if stage is not None and stage["stage"] != STAGE_HOLDOUT_COMPLETE:
         not_proven_list.append("heldout evaluation completion")
     if comparator is not None:
@@ -221,13 +256,8 @@ def _project_experiment_ref(raw: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     result["highest_safe_claim"] = highest_claim
     result["not_proven"] = not_proven_list
     result["correctness_certification"] = correctness
-    if stage is not None and stage["stage"] == STAGE_HOLDOUT_COMPLETE and disposition in {
-        "REJECTED", "CLOSE_FOR_NOW", "REJECT_AS_GOVERNED_DEFAULT", "STOPPED_BY_GATE"
-    }:
-        # Keep correctness/performance boundaries explicit in every projection.
-        result["performance_cannot_override_correctness"] = True
-    else:
-        result["performance_cannot_override_correctness"] = True
+    # Keep correctness/performance boundaries explicit in every projection.
+    result["performance_cannot_override_correctness"] = True
     return result, missing
 
 
@@ -327,7 +357,8 @@ def validate_campaign_closeout(evidence: Any) -> dict[str, Any]:
         "experiment_id", "experiment_generation", "run_state", "run_binding_hash",
         "result_receipt_identity", "result_receipt_sha256", "preflight_binding_hash",
         "preflight_disposition", "staged_gate_binding_hash", "staged_gate_stage",
-        "staged_gate_terminal", "disposition", "highest_safe_claim", "not_proven",
+        "staged_gate_terminal", "necessary_condition_stop_binding_hash", "disposition",
+        "highest_safe_claim", "not_proven",
         "correctness_certification",
     }
     ref_ids: set[str] = set()
@@ -348,8 +379,18 @@ def validate_campaign_closeout(evidence: Any) -> dict[str, Any]:
                 raise ValueError("CAMPAIGN_COMPLETE_WITH_UNBOUND_EVIDENCE")
             if not _is_hash(ref["staged_gate_binding_hash"]) or ref["staged_gate_terminal"] is not True:
                 raise ValueError("CAMPAIGN_COMPLETE_WITH_NONTERMINAL_GATE")
-            if ref["staged_gate_stage"] not in {STAGE_STOP, STAGE_HARD_STOP, STAGE_DEFER, STAGE_HOLDOUT_COMPLETE}:
+            if ref["staged_gate_stage"] not in {STAGE_STOP, STAGE_HARD_STOP, STAGE_HOLDOUT_COMPLETE}:
                 raise ValueError("CAMPAIGN_COMPLETE_WITH_NONTERMINAL_GATE")
+            if ref["preflight_disposition"] == PREFLIGHT_DEFER and (
+                ref["staged_gate_stage"] != STAGE_HARD_STOP
+                or not _is_sha256_digest(ref.get("necessary_condition_stop_binding_hash"))
+            ):
+                raise ValueError("CAMPAIGN_COMPLETE_WITH_DEFERRED_PREFLIGHT")
+            if (
+                ref["necessary_condition_stop_binding_hash"] is not None
+                and not _is_sha256_digest(ref["necessary_condition_stop_binding_hash"])
+            ):
+                raise ValueError("CAMPAIGN_NECESSARY_STOP_BINDING_INVALID")
             if not isinstance(ref.get("result_receipt_identity"), str) or not isinstance(ref.get("highest_safe_claim"), str):
                 raise ValueError("CAMPAIGN_COMPLETE_WITHOUT_RESULT_OR_CLAIM_BOUNDARY")
             correctness = ref.get("correctness_certification")
@@ -394,14 +435,21 @@ def evaluate_reopen_trigger(
         raise ValueError("CAMPAIGN_REOPEN_REQUIRES_NEW_EXPERIMENT_GENERATION")
     changes = evidence_delta.get("changes") if isinstance(evidence_delta, Mapping) else None
     delta_hash = evidence_delta.get("evidence_hash") if isinstance(evidence_delta, Mapping) else None
-    if evidence_delta is not None and (not isinstance(changes, Mapping) or not _is_hash(delta_hash)):
+    if evidence_delta is not None and (
+        not isinstance(evidence_delta, Mapping)
+        or set(evidence_delta) != {"changes", "evidence_hash"}
+        or not isinstance(changes, Mapping)
+        or not _is_hash(delta_hash)
+        or delta_hash != _hash(dict(changes))
+    ):
         raise ValueError("CAMPAIGN_REOPEN_DELTA_EVIDENCE_INVALID")
     for trigger in record["reopen_triggers"]:
         if trigger["experiment_id"] != experiment_id:
             continue
         matches = False
         if trigger["trigger_type"] == MATERIAL_DELTA and isinstance(changes, Mapping):
-            matches = changes.get(trigger["field_path"]) == trigger["expected_value"]
+            actual = _read_field_path(changes, trigger["field_path"])
+            matches = actual is not _MISSING and actual == trigger["expected_value"]
         elif trigger["trigger_type"] == OWNER_DECISION:
             matches = (owner_decision_ref == trigger["owner_decision_ref"] and
                        owner_decision_sha256 == trigger["owner_decision_sha256"] and

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from math import isfinite
 from typing import Any, Literal, Mapping, Sequence, overload
 
@@ -95,6 +96,12 @@ def _hash(value: Any) -> str:
 def _is_hash(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 71 and value.startswith("sha256:") and all(
         c in "0123456789abcdef" for c in value[7:]
+    )
+
+
+def _is_sha256_digest(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        c in "0123456789abcdef" for c in value
     )
 
 
@@ -270,18 +277,75 @@ def validate_comparator_preflight(evidence: Any) -> dict[str, Any]:
     if not isinstance(evidence.get("dimensions"), Mapping) or set(evidence["dimensions"]) != set(COMPARATOR_DIMENSIONS):
         raise ValueError("PREFLIGHT_COMPARATOR_DIMENSIONS_INVALID")
     for name, item in evidence["dimensions"].items():
-        if not isinstance(item, Mapping) or item.get("status") not in _COMPARATOR_STATES:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"status", "value", "evidence_hash", "reason"}
+            or item.get("status") not in _COMPARATOR_STATES
+        ):
             raise ValueError(f"PREFLIGHT_COMPARATOR_STATUS_INVALID:{name}")
         if item.get("status") in {COMPARATOR_MATCHED, COMPARATOR_MISMATCHED} and not _is_hash(item.get("evidence_hash")):
             raise ValueError(f"PREFLIGHT_COMPARATOR_EVIDENCE_REQUIRED:{name}")
         if item.get("status") in {COMPARATOR_MATCHED, COMPARATOR_MISMATCHED} and item.get("value") is None:
             raise ValueError(f"PREFLIGHT_COMPARATOR_VALUE_REQUIRED:{name}")
+        if item.get("status") in {COMPARATOR_UNSUPPORTED, COMPARATOR_NOT_OBSERVED, COMPARATOR_NOT_APPLICABLE}:
+            reason = item.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(f"PREFLIGHT_COMPARATOR_REASON_REQUIRED:{name}")
     sampling = evidence.get("sampling_request")
     if not isinstance(sampling, Mapping):
         raise ValueError("PREFLIGHT_SAMPLING_REQUEST_INVALID")
+    required_sampling_keys = {
+        "requested_fields", "accepted_fields", "semantic_equivalents", "unmatched_fields"
+    }
+    if not required_sampling_keys.issubset(sampling) or set(sampling) - (
+        required_sampling_keys | {"compatibility_amendment", "amended_from_fields"}
+    ):
+        raise ValueError("PREFLIGHT_SAMPLING_REQUEST_INVALID")
+    requested = sampling.get("requested_fields")
+    accepted = sampling.get("accepted_fields")
+    equivalents = sampling.get("semantic_equivalents")
     unmatched = sampling.get("unmatched_fields")
-    if not isinstance(unmatched, list):
+    if (
+        not isinstance(requested, list)
+        or not isinstance(accepted, list)
+        or not isinstance(equivalents, Mapping)
+        or not isinstance(unmatched, list)
+        or any(not isinstance(field, str) or not field.strip() for field in requested + accepted + unmatched)
+        or requested != sorted(set(requested))
+        or accepted != sorted(set(accepted))
+        or unmatched != sorted(set(unmatched))
+        or any(not isinstance(key, str) or not key.strip() or not isinstance(value, str) or not value.strip()
+               for key, value in equivalents.items())
+    ):
         raise ValueError("PREFLIGHT_SAMPLING_FIELDS_INVALID")
+    expected_unmatched = sorted(
+        field for field in requested
+        if field not in accepted and equivalents.get(field) not in accepted
+    )
+    if unmatched != expected_unmatched:
+        raise ValueError("PREFLIGHT_SAMPLING_UNMATCHED_FIELDS_MISMATCH")
+    amendment = sampling.get("compatibility_amendment")
+    amended_from = sampling.get("amended_from_fields")
+    if amendment is not None:
+        if (
+            not isinstance(amendment, Mapping)
+            or set(amendment) != {"amendment_id", "sha256", "frozen_before_formal_run", "amended_request_fields"}
+            or not isinstance(amendment.get("amendment_id"), str)
+            or not amendment["amendment_id"].strip()
+            or not _is_hash(amendment.get("sha256"))
+            or amendment.get("frozen_before_formal_run") is not True
+            or amendment.get("amended_request_fields") != requested
+            or amended_from is None
+            or not isinstance(amended_from, list)
+            or any(not isinstance(field, str) or not field.strip() for field in amended_from)
+            or amended_from != sorted(set(amended_from))
+            or not set(requested).issubset(amended_from)
+            or not set(requested).issubset(accepted)
+            or unmatched
+        ):
+            raise ValueError("PREFLIGHT_COMPATIBILITY_AMENDMENT_INVALID")
+    elif amended_from is not None:
+        raise ValueError("PREFLIGHT_COMPATIBILITY_AMENDMENT_INVALID")
     expected = all(item["status"] in {COMPARATOR_MATCHED, COMPARATOR_NOT_APPLICABLE}
                    for item in evidence["dimensions"].values()) and not unmatched
     if evidence.get("formal_comparable") is not expected:
@@ -298,6 +362,32 @@ def validate_comparator_preflight(evidence: Any) -> dict[str, Any]:
     if evidence.get("binding_hash") != _hash_payload(evidence):
         raise ValueError("PREFLIGHT_COMPARATOR_BINDING_HASH_MISMATCH")
     return dict(evidence)
+
+
+def _comparator_ready_for_scope(evidence: Mapping[str, Any]) -> bool:
+    """Allow explicit whole-stack observations without claiming parity."""
+    if evidence.get("formal_comparable") is True:
+        return True
+    if evidence.get("comparison_scope") != "WHOLE_RUNTIME_STACK_ONLY":
+        return False
+    sampling = evidence.get("sampling_request")
+    dimensions = evidence.get("dimensions")
+    if not isinstance(sampling, Mapping) or sampling.get("unmatched_fields"):
+        return False
+    if not isinstance(dimensions, Mapping):
+        return False
+    stack_dimensions = {
+        "cache_semantics", "concurrency_and_admission_policy", "material_runtime_fields"
+    }
+    for name, item in dimensions.items():
+        status = item.get("status") if isinstance(item, Mapping) else None
+        if status == COMPARATOR_NOT_OBSERVED:
+            return False
+        if name not in stack_dimensions and status not in {
+            COMPARATOR_MATCHED, COMPARATOR_NOT_APPLICABLE
+        }:
+            return False
+    return True
 
 
 def compare_comparator_preflights(
@@ -321,7 +411,16 @@ def compare_comparator_preflights(
         name in {"cache_semantics", "concurrency_and_admission_policy", "material_runtime_fields", "comparator_identity"}
         for name in changed
     ) or first["comparison_scope"] == "WHOLE_RUNTIME_STACK_ONLY" or second["comparison_scope"] == "WHOLE_RUNTIME_STACK_ONLY"
-    compatible = not changed and first["formal_comparable"] and second["formal_comparable"]
+    blocking_changes = any(
+        name in {"sampling_fields", "reasoning_mode", "context_and_prefill_policy", "sampling_request"}
+        for name in changed
+    )
+    scope_ready = _comparator_ready_for_scope(first) and _comparator_ready_for_scope(second)
+    configuration_matched = (
+        not changed and first["formal_comparable"] and second["formal_comparable"]
+    )
+    stack_comparable = scope_ready and stack_only and not blocking_changes
+    compatible = configuration_matched or stack_comparable
     return {
         "schema": "nexus.learning_comparator_pair_comparison.v1",
         "left_binding_hash": first["binding_hash"],
@@ -329,8 +428,8 @@ def compare_comparator_preflights(
         "changed_dimensions": sorted(changed),
         "evidence_mixing_allowed": compatible,
         "comparison_scope": (
-            "CONFIGURATION_MATCHED" if compatible
-            else "WHOLE_RUNTIME_STACK_ONLY" if stack_only
+            "CONFIGURATION_MATCHED" if configuration_matched
+            else "WHOLE_RUNTIME_STACK_ONLY" if stack_comparable
             else "NOT_COMPARABLE"
         ),
         "claim_ceiling": "comparator scope evidence only; no isolated runtime or scheduler claim",
@@ -553,8 +652,8 @@ def build_cohort_preflight(
         }
         normalized_cases.append(item)
     normalized_cases.sort(key=lambda item: (item["split"], item["case_id"], item["source_group_id"], item["outcome"] or ""))
-    ids = [item["case_id"] for item in normalized_cases]
-    duplicates = sorted({ident for ident in ids if ids.count(ident) > 1})
+    id_counts = Counter(item["case_id"] for item in normalized_cases)
+    duplicates = sorted(ident for ident, count in id_counts.items() if count > 1)
     calibration = [item for item in normalized_cases if item["split"] == "CALIBRATION"]
     heldout = [item for item in normalized_cases if item["split"] == "HOLDOUT"]
     if not calibration or not heldout:
@@ -644,8 +743,15 @@ def build_cohort_preflight(
         pending.append("comparator_preflight_missing")
     else:
         comparator = validate_comparator_preflight(comparator_preflight)
-        if not comparator["formal_comparable"]:
-            if any(item["status"] == COMPARATOR_MISMATCHED for item in comparator["dimensions"].values()):
+        if not _comparator_ready_for_scope(comparator):
+            blocking_mismatch = any(
+                item["status"] == COMPARATOR_MISMATCHED
+                and name not in {
+                    "cache_semantics", "concurrency_and_admission_policy", "material_runtime_fields"
+                }
+                for name, item in comparator["dimensions"].items()
+            ) or bool(comparator["sampling_request"].get("unmatched_fields"))
+            if blocking_mismatch:
                 failures.append("comparator_material_mismatch")
             else:
                 pending.append("comparator_not_fully_observed")
@@ -777,7 +883,8 @@ def validate_cohort_preflight(evidence: Any) -> dict[str, Any]:
         raise ValueError("PREFLIGHT_CASE_COUNT_MISMATCH")
     if cohort.get("cohort_hash") != _hash(cases):
         raise ValueError("PREFLIGHT_COHORT_HASH_MISMATCH")
-    duplicate_ids = sorted({item["case_id"] for item in cases if sum(1 for row in cases if row["case_id"] == item["case_id"]) > 1})
+    case_id_counts = Counter(item["case_id"] for item in cases)
+    duplicate_ids = sorted(case_id for case_id, count in case_id_counts.items() if count > 1)
     if duplicate_ids != cohort.get("duplicate_case_ids"):
         raise ValueError("PREFLIGHT_DUPLICATE_CASE_PROOF_MISMATCH")
     cal = [item for item in cases if item.get("split") == "CALIBRATION"]
@@ -831,7 +938,7 @@ def validate_cohort_preflight(evidence: Any) -> dict[str, Any]:
         truth.get("status") != "DECLARED"
         or leakage.get("status") != LEAKAGE_PASS
         or not isinstance(evidence.get("comparator_preflight"), Mapping)
-        or evidence["comparator_preflight"].get("formal_comparable") is not True
+        or not _comparator_ready_for_scope(evidence["comparator_preflight"])
         or not isinstance(evidence.get("resource_observation"), Mapping)
         or not evidence.get("hard_gates")
     ):
@@ -867,20 +974,68 @@ def build_staged_gate_evidence(
     preflight: Mapping[str, Any],
     stage_observation: Mapping[str, Any] | None = None,
     previous_evidence: Mapping[str, Any] | None = None,
+    previous_preflight: Mapping[str, Any] | None = None,
     necessary_condition_stop_evidence: Mapping[str, Any] | None = None,
     experiment_integrity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Advance a deterministic evidence state machine; terminal negative evidence is sticky."""
     pre = validate_cohort_preflight(preflight)
+    recovering_defer = False
+    previous: dict[str, Any] | None = None
     if previous_evidence is not None:
-        previous = validate_staged_gate_evidence(previous_evidence, preflight=pre)
+        prior_pre = validate_cohort_preflight(previous_preflight if previous_preflight is not None else pre)
+        previous = validate_staged_gate_evidence(previous_evidence, preflight=prior_pre)
         if previous["terminal"] is True:
             return dict(previous)
-        current_stage = previous["stage"]
         history = list(previous["history"])
         observations = dict(previous["observations"])
         prior_hash = previous["binding_hash"]
         heldout_opened = previous["heldout_opened"]
+        if previous["preflight_binding_hash"] != pre["binding_hash"]:
+            same_frozen_identity = all(
+                prior_pre.get(field) == pre.get(field)
+                for field in (
+                    "experiment_id", "hard_gates_hash", "experiment_integrity_binding_hash",
+                    "frozen_policy_hash",
+                )
+            ) and prior_pre["cohort"]["cohort_hash"] == pre["cohort"]["cohort_hash"]
+            if (
+                previous_preflight is None
+                or previous["stage"] != STAGE_DEFER
+                or previous["terminal"] is True
+                or prior_pre["preflight_disposition"] != PREFLIGHT_DEFER
+                or pre["preflight_disposition"] != PREFLIGHT_PASS
+                or not same_frozen_identity
+                or observations
+                or heldout_opened
+            ):
+                raise ValueError("STAGED_GATE_PREFLIGHT_BINDING_MISMATCH")
+            history.append({
+                "stage": STAGE_PREFLIGHT,
+                "reason": "deferred preflight superseded by complete bound evidence",
+                "prior_preflight_binding_hash": prior_pre["binding_hash"],
+                "updated_preflight_binding_hash": pre["binding_hash"],
+            })
+            current_stage = STAGE_PREFLIGHT
+        else:
+            current_stage = previous["stage"]
+            recovering_defer = current_stage == STAGE_DEFER
+            if recovering_defer:
+                last = history[-1] if history else {}
+                previous_phase = last.get("stage")
+                phase_map = {
+                    STAGE_SMOKE: STAGE_SMOKE,
+                    STAGE_CALIBRATION: STAGE_CALIBRATION,
+                    "HOLDOUT": STAGE_HOLDOUT_ELIGIBLE,
+                }
+                if previous_phase in phase_map:
+                    current_stage = phase_map[previous_phase]
+                elif previous_phase == STAGE_DEFER and last.get("reason") == "preflight incomplete":
+                    if stage_observation is not None:
+                        raise ValueError("STAGED_GATE_PREFLIGHT_DEFER_REQUIRES_UPDATED_PREFLIGHT")
+                    return dict(previous)
+                else:
+                    raise ValueError("STAGED_GATE_DEFER_RESUME_STATE_INVALID")
     else:
         current_stage = STAGE_PREFLIGHT
         history = []
@@ -910,6 +1065,11 @@ def build_staged_gate_evidence(
         if ncs_decision != CONTINUE:
             raise ValueError("STAGED_GATE_NECESSARY_STOP_DECISION_INVALID")
 
+    if recovering_defer and stage_observation is None:
+        if previous is None:
+            raise ValueError("STAGED_GATE_DEFER_RESUME_STATE_INVALID")
+        return dict(previous)
+
     if current_stage == STAGE_PREFLIGHT:
         if pre["preflight_disposition"] == PREFLIGHT_FAIL:
             current_stage = STAGE_STOP
@@ -919,7 +1079,7 @@ def build_staged_gate_evidence(
         if pre["preflight_disposition"] == PREFLIGHT_DEFER:
             current_stage = STAGE_DEFER
             history.append({"stage": STAGE_DEFER, "reason": "preflight incomplete"})
-            return _staged_payload(pre, current_stage, "DEFER", True, False, history,
+            return _staged_payload(pre, current_stage, "DEFER", False, False, history,
                                    observations, prior_hash, necessary_condition_stop_evidence)
         current_stage = STAGE_SMOKE
         history.append({"stage": STAGE_PREFLIGHT, "reason": "deterministic preflight passed"})
@@ -936,7 +1096,18 @@ def build_staged_gate_evidence(
     observed = _validate_stage_observation(stage_observation)
     stage_key = "HOLDOUT" if phase == STAGE_HOLDOUT_ELIGIBLE else phase
     if stage_key in observations:
-        raise ValueError("STAGED_GATE_STAGE_OBSERVATION_ALREADY_RECORDED")
+        if not recovering_defer or not history or history[-1].get("stage") != stage_key:
+            raise ValueError("STAGED_GATE_STAGE_OBSERVATION_ALREADY_RECORDED")
+        old_observation = observations[stage_key]
+        new_observation_id = _text(stage_observation.get("observation_id"), "stage_observation_id")
+        if old_observation.get("observation_id") == new_observation_id:
+            raise ValueError("STAGED_GATE_DEFER_RESUME_REQUIRES_NEW_OBSERVATION")
+        history.append({
+            "stage": stage_key,
+            "reason": "deferred observation superseded by later bound evidence",
+            "superseded_observation_id": old_observation["observation_id"],
+            "superseded_evidence_hash": old_observation["evidence_hash"],
+        })
     observations[stage_key] = observed
     if phase == STAGE_HOLDOUT_ELIGIBLE:
         heldout_opened = True
@@ -954,7 +1125,7 @@ def build_staged_gate_evidence(
         return _staged_payload(pre, STAGE_HARD_STOP, "STOP", True, heldout_opened,
                                history, observations, prior_hash, necessary_condition_stop_evidence)
     if missing_metrics or observed["status"] == "DEFER":
-        return _staged_payload(pre, STAGE_DEFER, "DEFER", True, heldout_opened,
+        return _staged_payload(pre, STAGE_DEFER, "DEFER", False, heldout_opened,
                                history, observations, prior_hash, necessary_condition_stop_evidence)
     if phase == STAGE_SMOKE:
         next_stage, disposition = STAGE_CALIBRATION, "IN_PROGRESS"
@@ -1015,14 +1186,35 @@ def validate_staged_gate_evidence(evidence: Any, *, preflight: Mapping[str, Any]
         raise ValueError("STAGED_GATE_STAGE_INVALID")
     if not isinstance(evidence.get("heldout_opened"), bool):
         raise ValueError("STAGED_GATE_HELDOUT_STATE_INVALID")
+    if not isinstance(evidence.get("terminal"), bool):
+        raise ValueError("STAGED_GATE_TERMINAL_STATE_INVALID")
     if evidence.get("heldout_preserved_sealed") is not (not evidence.get("heldout_opened")):
         raise ValueError("STAGED_GATE_HELDOUT_SEALING_INVALID")
     if stage in {STAGE_STOP, STAGE_HARD_STOP} and evidence.get("disposition") != "STOP":
         raise ValueError("STAGED_GATE_STOP_DISPOSITION_INVALID")
     if stage == STAGE_DEFER and evidence.get("disposition") != "DEFER":
         raise ValueError("STAGED_GATE_DEFER_DISPOSITION_INVALID")
-    if evidence.get("terminal") is True and stage not in {STAGE_STOP, STAGE_HARD_STOP, STAGE_DEFER, STAGE_HOLDOUT_COMPLETE}:
+    if stage == STAGE_DEFER and evidence.get("terminal") is True:
+        raise ValueError("STAGED_GATE_DEFER_CANNOT_BE_TERMINAL")
+    if stage in {STAGE_STOP, STAGE_HARD_STOP, STAGE_HOLDOUT_COMPLETE} and evidence.get("terminal") is not True:
+        raise ValueError("STAGED_GATE_TERMINAL_STAGE_REQUIRED")
+    if evidence.get("terminal") is True and stage not in {STAGE_STOP, STAGE_HARD_STOP, STAGE_HOLDOUT_COMPLETE}:
         raise ValueError("STAGED_GATE_TERMINAL_STAGE_INVALID")
+    if pre["preflight_disposition"] == PREFLIGHT_DEFER and stage not in {STAGE_DEFER, STAGE_HARD_STOP}:
+        raise ValueError("STAGED_GATE_ADVANCED_FROM_DEFERRED_PREFLIGHT")
+    if pre["preflight_disposition"] == PREFLIGHT_FAIL and stage not in {STAGE_STOP, STAGE_HARD_STOP}:
+        raise ValueError("STAGED_GATE_ADVANCED_FROM_FAILED_PREFLIGHT")
+    if pre["preflight_disposition"] == PREFLIGHT_PASS and stage == STAGE_STOP:
+        raise ValueError("STAGED_GATE_STOP_WITHOUT_PREFLIGHT_FAILURE")
+    necessary_stop_hash = evidence.get("necessary_condition_stop_binding_hash")
+    if necessary_stop_hash is not None and not _is_sha256_digest(necessary_stop_hash):
+        raise ValueError("STAGED_GATE_NECESSARY_STOP_BINDING_INVALID")
+    if (
+        pre["preflight_disposition"] == PREFLIGHT_DEFER
+        and stage == STAGE_HARD_STOP
+        and not _is_sha256_digest(necessary_stop_hash)
+    ):
+        raise ValueError("STAGED_GATE_DEFERRED_PREFLIGHT_STOP_REQUIRES_ISSUE_26_PROOF")
     if evidence.get("claim_ceiling") != PREFLIGHT_CLAIM_CEILING:
         raise ValueError("STAGED_GATE_CLAIM_CEILING_INVALID")
     if not isinstance(evidence.get("observations"), Mapping) or not isinstance(evidence.get("history"), list):

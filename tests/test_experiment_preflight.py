@@ -4,6 +4,7 @@ import copy
 
 import pytest
 
+from nexus_learning.effectiveness_measurement import compare_workflows_at_required_quality
 from nexus_learning.experiment_integrity import (
     CALIBRATED,
     INDEPENDENCE_UNIT_ROW,
@@ -12,6 +13,7 @@ from nexus_learning.experiment_integrity import (
 from nexus_learning.experiment_preflight import (
     ADMITTED,
     COMPARATOR_MATCHED,
+    COMPARATOR_NOT_OBSERVED,
     COMPARATOR_UNSUPPORTED,
     LEAKAGE_FAIL,
     LEAKAGE_NOT_EVALUATED,
@@ -23,6 +25,7 @@ from nexus_learning.experiment_preflight import (
     RECOVERY_YES,
     REFUSED,
     STAGE_CALIBRATION,
+    STAGE_DEFER,
     STAGE_HARD_STOP,
     STAGE_HOLDOUT_COMPLETE,
     STAGE_HOLDOUT_ELIGIBLE,
@@ -232,7 +235,19 @@ def test_comparator_settings_and_cache_semantics_remain_explicit():
     assert unsupported["formal_comparable"] is False
     assert unsupported["comparison_scope"] == "WHOLE_RUNTIME_STACK_ONLY"
     preflight = _preflight(comparator_preflight=unsupported)
-    assert preflight["preflight_disposition"] == PREFLIGHT_DEFER
+    assert preflight["preflight_disposition"] == PREFLIGHT_PASS
+    assert preflight["value_claim_eligible"] is True
+    assert preflight["comparator_preflight"]["comparison_scope"] == "WHOLE_RUNTIME_STACK_ONLY"
+    pair = compare_comparator_preflights(_comparator(), unsupported)
+    assert pair["evidence_mixing_allowed"] is True
+    assert pair["comparison_scope"] == "WHOLE_RUNTIME_STACK_ONLY"
+
+    unobserved = _comparator(
+        cache_semantics={"status": COMPARATOR_UNSUPPORTED, "reason": "prefix cache cannot be disabled"},
+        reasoning_mode={"status": COMPARATOR_NOT_OBSERVED, "reason": "not observed"},
+    )
+    deferred = _preflight(comparator_preflight=unobserved)
+    assert deferred["preflight_disposition"] == PREFLIGHT_DEFER
 
 
 def test_auto_selected_prefill_changes_make_comparator_receipts_non_comparable():
@@ -334,6 +349,83 @@ def test_calibration_passes_before_holdout_can_become_eligible_or_complete():
     })
     assert state["stage"] == STAGE_HOLDOUT_COMPLETE
     assert state["heldout_opened"] is True
+
+
+def test_deferred_stage_observation_can_resume_with_new_bound_evidence():
+    preflight = _preflight()
+    state = _stage(preflight)
+    deferred = _stage(preflight, previous=state, observation={
+        "observation_id": "smoke-deferred", "status": "DEFER", "evidence_hash": HASH_A,
+        "metrics": {},
+    })
+    assert deferred["stage"] == STAGE_DEFER
+    assert deferred["terminal"] is False
+    resumed = _stage(preflight, previous=deferred, observation={
+        "observation_id": "smoke-complete", "status": "PASS", "evidence_hash": HASH_B,
+        "metrics": {"error_count": 0},
+    })
+    assert resumed["stage"] == STAGE_CALIBRATION
+    assert resumed["observations"]["SMOKE"]["observation_id"] == "smoke-complete"
+    assert any("superseded" in event.get("reason", "") for event in resumed["history"])
+
+
+def test_preflight_defer_can_resume_only_with_updated_same_generation_evidence():
+    deferred_preflight = _preflight(ground_truth_provenance=None)
+    deferred = _stage(deferred_preflight)
+    assert deferred["stage"] == STAGE_DEFER
+    assert deferred["terminal"] is False
+
+    complete_preflight = _preflight()
+    resumed = build_staged_gate_evidence(
+        preflight=complete_preflight,
+        previous_evidence=deferred,
+        previous_preflight=deferred_preflight,
+    )
+    assert resumed["stage"] == STAGE_SMOKE
+    assert resumed["terminal"] is False
+    assert any("superseded by complete bound evidence" in event.get("reason", "")
+               for event in resumed["history"])
+
+
+def test_quality_floor_failure_cannot_be_rescued_by_lower_cost_or_faster_runtime_under_issue_22():
+    def row(identity, qualified, *, cost, wall_time):
+        attempts = 10
+        return {
+            "workflow_identity": identity,
+            "workflow_revision": "r1",
+            "task_fingerprint": "cohort:v1",
+            "attempt_count": attempts,
+            "qualified_success_count": qualified,
+            "critical_failure_count": 0,
+            "semantic_failure_count": attempts - qualified,
+            "provider_failure_count": 0,
+            "false_allow_count": 0,
+            "model_invocation_count": 10,
+            "provider_invocation_count": 0,
+            "fallback_count": 0,
+            "token_usage": 100,
+            "wall_time_seconds": wall_time,
+            "monetary_cost_usd": cost,
+            "human_intervention_count": 0,
+            "missingness_reasons": [],
+            "ineligibility_reasons": [],
+        }
+
+    evidence = compare_workflows_at_required_quality(
+        [
+            row("incumbent", 10, cost=10.0, wall_time=10.0),
+            row("cheap-fast-below-floor", 6, cost=1.0, wall_time=1.0),
+        ],
+        required_quality_floor=0.9,
+        critical_failure_ceiling=0,
+        baseline_workflow="incumbent",
+        baseline_workflow_revision="r1",
+    )
+    candidate = next(item for item in evidence["rows"]
+                     if item["workflow_identity"] == "cheap-fast-below-floor")
+    assert candidate["gate_status"] == "QUALITY_FLOOR_FAILED"
+    assert "COST_COMPARABLE" not in candidate["dispositions"]
+    assert "cheap-fast-below-floor" not in evidence["summary"]["cost_improving_workflows"]
 
 
 def test_necessary_condition_stop_reuses_stronger_issue_26_proof():
