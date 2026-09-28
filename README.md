@@ -22,6 +22,8 @@ external authority may adopt
 
 Learning never self-promotes models, mutates CapabilityPlanner, alters workforce admission, or approves changes.
 
+Experiment run identity, cohort preflight/staged stop gates, and campaign closeout evidence are documented in [Experiment Evidence Contracts](docs/architecture/EXPERIMENT_EVIDENCE_CONTRACTS.md).
+
 ## Development
 
 ```bash

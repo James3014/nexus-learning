@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from nexus_learning.campaign_closeout import (
+    CAMPAIGN_CLOSEOUT_CLAIM_CEILING,
+    CAMPAIGN_CLOSEOUT_SCHEMA,
+    CAMPAIGN_REOPEN_SCHEMA,
+    NO_GATE_DEFINED,
+    build_campaign_closeout,
+    evaluate_reopen_trigger,
+    validate_campaign_closeout,
+)
 from nexus_learning.closure_effectiveness import (
     EffectivenessReport,
     append_learning_episode,
@@ -72,6 +81,42 @@ from nexus_learning.experiment_integrity import (
     require_remote_provider_observation,
     validate_evidence_origin_provenance,
     validate_experiment_integrity,
+)
+from nexus_learning.experiment_preflight import (
+    COHORT_PREFLIGHT_SCHEMA,
+    PREFLIGHT_CLAIM_CEILING,
+    STAGED_GATE_SCHEMA,
+    build_cohort_preflight,
+    build_comparator_preflight,
+    build_resource_observation,
+    build_staged_gate_evidence,
+    compare_comparator_preflights,
+    validate_cohort_preflight,
+    validate_comparator_preflight,
+    validate_resource_observation,
+    validate_staged_gate_evidence,
+)
+from nexus_learning.experiment_run_identity import (
+    COMPLETE as RUN_COMPLETE,
+)
+from nexus_learning.experiment_run_identity import (
+    EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING,
+    EXPERIMENT_RUN_IDENTITY_SCHEMA,
+    build_experiment_run_identity,
+    classify_run_observation,
+    validate_experiment_run_identity,
+)
+from nexus_learning.experiment_run_identity import (
+    FAILED as RUN_FAILED,
+)
+from nexus_learning.experiment_run_identity import (
+    NOT_STARTED as RUN_NOT_STARTED,
+)
+from nexus_learning.experiment_run_identity import (
+    OUTCOME_UNKNOWN as RUN_OUTCOME_UNKNOWN,
+)
+from nexus_learning.experiment_run_identity import (
+    RUNNING as RUN_RUNNING,
 )
 from nexus_learning.necessary_condition_stop import (
     BOUND_EXACT,
@@ -175,6 +220,35 @@ __all__ = [
     "QUALITY_QUALIFIED_ECONOMICS_SCHEMA",
     "QualityWorkflowRow",
     "compare_workflows_at_required_quality",
+    "EXPERIMENT_RUN_IDENTITY_SCHEMA",
+    "EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING",
+    "RUN_NOT_STARTED",
+    "RUN_RUNNING",
+    "RUN_COMPLETE",
+    "RUN_FAILED",
+    "RUN_OUTCOME_UNKNOWN",
+    "build_experiment_run_identity",
+    "validate_experiment_run_identity",
+    "classify_run_observation",
+    "COHORT_PREFLIGHT_SCHEMA",
+    "STAGED_GATE_SCHEMA",
+    "PREFLIGHT_CLAIM_CEILING",
+    "build_comparator_preflight",
+    "validate_comparator_preflight",
+    "compare_comparator_preflights",
+    "build_resource_observation",
+    "validate_resource_observation",
+    "build_cohort_preflight",
+    "validate_cohort_preflight",
+    "build_staged_gate_evidence",
+    "validate_staged_gate_evidence",
+    "CAMPAIGN_CLOSEOUT_SCHEMA",
+    "CAMPAIGN_REOPEN_SCHEMA",
+    "CAMPAIGN_CLOSEOUT_CLAIM_CEILING",
+    "NO_GATE_DEFINED",
+    "build_campaign_closeout",
+    "validate_campaign_closeout",
+    "evaluate_reopen_trigger",
     "OutcomeMemoryManager",
     "log_retrieval_audit",
     "AuditEntry",
