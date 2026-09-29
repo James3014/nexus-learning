@@ -254,6 +254,11 @@ def project_frontier_from_gates(
     """Compose research frontier governance (#37) from #31 preflight and #32 closeout state."""
     from nexus_learning.research_frontier import build_research_frontier_governance
 
+    if not verify_preflight(preflight_evidence):
+        raise ValueError("preflight_evidence failed canonical #31 validation")
+    if not verify_closeout(closeout_evidence):
+        raise ValueError("closeout_evidence failed canonical #32 validation")
+
     incumbent = preflight_evidence.get("incumbent_identity")
     if not isinstance(incumbent, Mapping):
         raise ValueError("preflight_evidence missing incumbent_identity mapping")

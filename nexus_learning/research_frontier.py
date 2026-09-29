@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any, Mapping, Sequence
 
 RESEARCH_FRONTIER_SCHEMA = "nexus.learning_research_frontier_governance.v1"
@@ -157,6 +158,14 @@ def build_research_frontier_governance(
     proposal_id = _text(proposal_id, "proposal_id")
     hypothesis = _text(hypothesis, "hypothesis")
     mechanism_family = _text(mechanism_family, "mechanism_family")
+    if residual_decision_delta is not None:
+        if (
+            isinstance(residual_decision_delta, bool)
+            or not isinstance(residual_decision_delta, (int, float))
+            or not math.isfinite(residual_decision_delta)
+        ):
+            raise ValueError("residual_decision_delta must be a finite number or None")
+        residual_decision_delta = float(residual_decision_delta)
 
     # Enforce claim ceiling and strict non-authority
     if claim_ceiling != RESEARCH_FRONTIER_CLAIM_CEILING:
@@ -281,7 +290,12 @@ def build_research_frontier_governance(
                 mismatches.append("authority_mismatch")
             if fail_mismatch:
                 mismatches.append("failure_model_mismatch")
-            scope_recommendation = f"FULL_EXPERIMENT_REQUIRED_DUE_TO_{'_AND_'.join(mismatches).upper()}"
+            if not mismatches:
+                mismatches.append("proof_obligation_alignment_unresolved")
+            scope_recommendation = (
+                "FULL_EXPERIMENT_REQUIRED_DUE_TO_"
+                + "_AND_".join(mismatches).upper()
+            )
             evidence_gaps.append(
                 f"external donor has unresolved mismatch ({', '.join(mismatches)}); "
                 "requires bounded/full Nexus experiment"
@@ -326,11 +340,9 @@ def _is_closed_negative(
     """Check whether mechanism family is recorded as closed negative in campaign closeout."""
     mech_norm = mechanism_family.strip().lower()
 
-    # Check not_proven list
-    for np in campaign_closeout.get("not_proven", []):
-        if str(np).strip().lower() in mech_norm or mech_norm in str(np).strip().lower():
-            return True
-
+    # "not_proven" records claim gaps and does not by itself mean a mechanism
+    # was rejected or closed. Only terminal-negative experiment dispositions
+    # may trigger the reopen gate.
     # Check closed_experiments
     for exp in campaign_closeout.get("closed_experiments", []):
         if not isinstance(exp, Mapping):
@@ -400,6 +412,92 @@ def validate_research_frontier_governance(evidence: Any) -> dict[str, Any]:
     disp = evidence.get("disposition")
     if disp not in FRONTIER_DISPOSITIONS:
         raise ValueError(f"unknown frontier disposition: {disp!r}")
+
+    eligible = evidence.get("eligible")
+    if not isinstance(eligible, bool):
+        raise ValueError("eligible must be a boolean")
+    expected_eligible = disp in {
+        DISPOSITION_ELIGIBLE_MINIMUM_TRANSFER_VALIDATION,
+        DISPOSITION_ELIGIBLE_FULL_EXPERIMENT,
+        DISPOSITION_ELIGIBLE_BOUNDED_EXPERIMENT,
+    }
+    if eligible is not expected_eligible:
+        raise ValueError(
+            f"eligible={eligible!r} is inconsistent with disposition {disp!r}"
+        )
+
+    current_incumbent = evidence.get("current_incumbent")
+    proposed_baseline = evidence.get("proposed_baseline")
+    if not isinstance(current_incumbent, Mapping):
+        raise ValueError("current_incumbent must be a mapping")
+    if not isinstance(proposed_baseline, Mapping):
+        raise ValueError("proposed_baseline must be a mapping")
+
+    cur_mech = _text(
+        current_incumbent.get("mechanism"),
+        "current_incumbent.mechanism",
+    )
+    cur_hash = _text(
+        current_incumbent.get("result_hash"),
+        "current_incumbent.result_hash",
+    )
+    base_mech = str(proposed_baseline.get("mechanism") or "").strip()
+    base_hash = str(proposed_baseline.get("result_hash") or "").strip()
+    baseline_obsolete = (
+        base_mech.lower() != cur_mech.lower()
+        or (base_hash and cur_hash and base_hash != cur_hash)
+    )
+    if baseline_obsolete and disp != DISPOSITION_INELIGIBLE_OBSOLETE_BASELINE:
+        raise ValueError(
+            "obsolete baseline cannot be represented as eligible frontier evidence"
+        )
+
+    scope = evidence.get("scope_recommendation")
+    if not isinstance(scope, str) or not scope.strip():
+        raise ValueError("scope_recommendation must be a non-empty string")
+    scope = scope.strip()
+    exact_scopes = {
+        DISPOSITION_INELIGIBLE_OBSOLETE_BASELINE: (
+            "REBASE_REQUIRED_AGAINST_LATEST_INCUMBENT"
+        ),
+        DISPOSITION_REOPEN_TRIGGER_REQUIRED: (
+            "REOPEN_TRIGGER_REQUIRED_BEFORE_EXPERIMENT"
+        ),
+        DISPOSITION_ELIGIBLE_MINIMUM_TRANSFER_VALIDATION: (
+            "MINIMUM_TRANSFER_VALIDATION_ONLY_NO_FULL_SCIENCE_RERUN"
+        ),
+        DISPOSITION_DROP_NO_DECISION_DELTA: "DROP_NO_DECISION_DELTA",
+    }
+    if disp in exact_scopes and scope != exact_scopes[disp]:
+        raise ValueError(
+            f"scope_recommendation {scope!r} is inconsistent with disposition {disp!r}"
+        )
+    if disp == DISPOSITION_ELIGIBLE_FULL_EXPERIMENT:
+        prefix = "FULL_EXPERIMENT_REQUIRED_DUE_TO_"
+        if not scope.startswith(prefix) or scope == prefix:
+            raise ValueError(
+                "full-experiment scope must name the unresolved proof obligation"
+            )
+    if disp == DISPOSITION_ELIGIBLE_BOUNDED_EXPERIMENT and scope not in {
+        "BOUNDED_EXPERIMENT_AUTHORIZED",
+        "REOPEN_TRIGGER_SATISFIED_BOUNDED_EXPERIMENT",
+    }:
+        raise ValueError(
+            "bounded-experiment scope is inconsistent with frontier disposition"
+        )
+
+    if disp == DISPOSITION_DROP_NO_DECISION_DELTA:
+        delta = evidence.get("residual_decision_delta")
+        if (
+            evidence.get("is_optional_branch") is not True
+            or isinstance(delta, bool)
+            or not isinstance(delta, (int, float))
+            or not math.isfinite(delta)
+            or delta > 0
+        ):
+            raise ValueError(
+                "DROP_NO_DECISION_DELTA requires an optional branch with finite delta <= 0"
+            )
 
     expected_hash = _hash({k: v for k, v in evidence.items() if k != "content_sha256"})
     if evidence.get("content_sha256") != expected_hash:
