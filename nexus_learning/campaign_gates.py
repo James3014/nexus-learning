@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Mapping
+from typing import Any, Mapping, Sequence
 
 PREFLIGHT_SCHEMA = "nexus.learning_cohort_preflight.v1"
 PREFLIGHT_CLAIM_CEILING = "LEARNING_COHORT_PREFLIGHT_STAGED_GATE_ONLY"
@@ -235,3 +235,38 @@ def verify_closeout(body):
         return dict(body) == recomputed
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
+
+
+def project_frontier_from_gates(
+    *,
+    preflight_evidence: Mapping[str, Any],
+    closeout_evidence: Mapping[str, Any],
+    proposal_id: str,
+    hypothesis: str,
+    proposed_baseline: Mapping[str, Any],
+    mechanism_family: str,
+    donor_evidence: Mapping[str, Any] | None = None,
+    residual_decision_delta: float | None = None,
+    is_optional_branch: bool = False,
+    reopen_trigger: Mapping[str, Any] | None = None,
+    proposed_authorities: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Compose research frontier governance (#37) from #31 preflight and #32 closeout state."""
+    from nexus_learning.research_frontier import build_research_frontier_governance
+
+    incumbent = preflight_evidence.get("incumbent_identity")
+    if not isinstance(incumbent, Mapping):
+        raise ValueError("preflight_evidence missing incumbent_identity mapping")
+    return build_research_frontier_governance(
+        proposal_id=proposal_id,
+        hypothesis=hypothesis,
+        current_incumbent=incumbent,
+        proposed_baseline=proposed_baseline,
+        mechanism_family=mechanism_family,
+        campaign_closeout=closeout_evidence,
+        donor_evidence=donor_evidence,
+        residual_decision_delta=residual_decision_delta,
+        is_optional_branch=is_optional_branch,
+        reopen_trigger=reopen_trigger,
+        proposed_authorities=proposed_authorities,
+    )

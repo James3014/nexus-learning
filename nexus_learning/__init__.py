@@ -138,6 +138,22 @@ from nexus_learning.necessary_condition_stop import (
 from nexus_learning.outcome_memory import (
     OutcomeMemoryManager,
 )
+from nexus_learning.research_frontier import (
+    ATTRIBUTION_CANDIDATE_GENERATION_MISS,
+    ATTRIBUTION_MODEL_CAPABILITY,
+    DISPOSITION_DROP_NO_DECISION_DELTA,
+    DISPOSITION_ELIGIBLE_BOUNDED_EXPERIMENT,
+    DISPOSITION_ELIGIBLE_FULL_EXPERIMENT,
+    DISPOSITION_ELIGIBLE_MINIMUM_TRANSFER_VALIDATION,
+    DISPOSITION_INELIGIBLE_OBSOLETE_BASELINE,
+    DISPOSITION_REOPEN_TRIGGER_REQUIRED,
+    RESEARCH_FRONTIER_CLAIM_CEILING,
+    RESEARCH_FRONTIER_SCHEMA,
+    build_research_frontier_governance,
+    classify_failure_attribution,
+    validate_research_frontier_governance,
+    verify_frontier_governance,
+)
 from nexus_learning.retrieval_audit import (
     AuditEntry,
     log_retrieval_audit,
@@ -274,4 +290,18 @@ __all__ = [
     "validate_friction_observation",
     "build_workflow_recommendation",
     "validate_workflow_recommendation",
+    "RESEARCH_FRONTIER_SCHEMA",
+    "RESEARCH_FRONTIER_CLAIM_CEILING",
+    "DISPOSITION_INELIGIBLE_OBSOLETE_BASELINE",
+    "DISPOSITION_REOPEN_TRIGGER_REQUIRED",
+    "DISPOSITION_ELIGIBLE_MINIMUM_TRANSFER_VALIDATION",
+    "DISPOSITION_ELIGIBLE_FULL_EXPERIMENT",
+    "DISPOSITION_ELIGIBLE_BOUNDED_EXPERIMENT",
+    "DISPOSITION_DROP_NO_DECISION_DELTA",
+    "ATTRIBUTION_CANDIDATE_GENERATION_MISS",
+    "ATTRIBUTION_MODEL_CAPABILITY",
+    "classify_failure_attribution",
+    "build_research_frontier_governance",
+    "validate_research_frontier_governance",
+    "verify_frontier_governance",
 ]
