@@ -303,3 +303,101 @@ def test_project_frontier_from_gates_composition():
     assert projected["eligible"] is False
     assert verify_frontier_governance(projected)
 
+
+
+def test_rehashed_forged_eligibility_is_rejected():
+    """Rehashing a forged eligibility/disposition pair must not launder evidence."""
+    import hashlib
+    import json
+
+    body = _base_proposal(
+        proposed_baseline={
+            "mechanism": "online-only",
+            "result_hash": "sha256:" + "b" * 64,
+        }
+    )
+    body["disposition"] = DISPOSITION_ELIGIBLE_BOUNDED_EXPERIMENT
+    body["eligible"] = True
+    body["scope_recommendation"] = "BOUNDED_EXPERIMENT_AUTHORIZED"
+    body["content_sha256"] = hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in body.items() if k != "content_sha256"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="obsolete baseline"):
+        validate_research_frontier_governance(body)
+
+
+def test_not_proven_claim_gap_does_not_reopen_gate_mechanism():
+    """A not_proven claim gap is not itself a terminal-negative mechanism disposition."""
+    closeout = {
+        "closed_experiments": [
+            {
+                "experiment_id": "sparse_retrieval",
+                "disposition": "PASS",
+            }
+        ],
+        "not_proven": ["dense_embedding"],
+        "reopen_triggers": [
+            {
+                "kind": "dense_index_economics_change",
+                "condition": "persistent index changes economics",
+            }
+        ],
+    }
+
+    body = _base_proposal(
+        mechanism_family="dense_embedding",
+        campaign_closeout=closeout,
+    )
+    assert body["disposition"] == DISPOSITION_ELIGIBLE_BOUNDED_EXPERIMENT
+    assert body["eligible"] is True
+
+
+def test_projection_rejects_unverified_gate_evidence():
+    """#37 projection must consume canonically validated #31/#32 evidence, not lookalikes."""
+    from nexus_learning.campaign_gates import project_frontier_from_gates
+
+    fake_preflight = {
+        "incumbent_identity": {
+            "deterministic_kind": "deterministic-first",
+            "result_hash": "sha256:" + "a" * 64,
+        }
+    }
+    fake_closeout = {
+        "closed_experiments": [],
+        "not_proven": [],
+        "reopen_triggers": [],
+    }
+
+    with pytest.raises(ValueError, match="preflight_evidence failed canonical"):
+        project_frontier_from_gates(
+            preflight_evidence=fake_preflight,
+            closeout_evidence=fake_closeout,
+            proposal_id="prop-forged",
+            hypothesis="forged evidence must fail closed",
+            proposed_baseline={
+                "mechanism": "deterministic-first",
+                "result_hash": "sha256:" + "a" * 64,
+            },
+            mechanism_family="sparse_retrieval",
+        )
+
+
+def test_non_aligned_donor_names_unresolved_proof_obligation():
+    donor = {
+        "donor_id": "AnalogousOnly",
+        "alignment": "PARTIAL",
+        "authority_mismatch": False,
+        "failure_model_mismatch": False,
+    }
+    body = _base_proposal(donor_evidence=donor)
+    assert body["disposition"] == DISPOSITION_ELIGIBLE_FULL_EXPERIMENT
+    assert (
+        body["scope_recommendation"]
+        == "FULL_EXPERIMENT_REQUIRED_DUE_TO_PROOF_OBLIGATION_ALIGNMENT_UNRESOLVED"
+    )
+    assert verify_frontier_governance(body)
