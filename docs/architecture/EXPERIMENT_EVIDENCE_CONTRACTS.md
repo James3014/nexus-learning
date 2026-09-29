@@ -33,10 +33,11 @@ cache semantics, concurrency/admission, and material runtime settings. Frozen
 compatibility amendments are required when a requested field is rejected.
 Pairwise comparator validation rejects unobserved or core-method differences
 before receipts are combined. Explicitly observed cache/runtime differences cap
-the comparison scope at
-`WHOLE_RUNTIME_STACK_ONLY`; the workflow may evaluate that scope only when all
-non-stack dimensions are explicitly matched and every dimension was observed.
-This scope does not claim isolated cache, runtime, or scheduler parity.
+the comparison scope at `WHOLE_RUNTIME_STACK_ONLY`; the workflow may evaluate
+that scope only when all non-stack dimensions are explicitly matched and every
+dimension was observed. A core-method mismatch or unobserved required dimension
+is `NOT_COMPARABLE`. These scopes do not claim isolated cache, runtime, or
+scheduler parity.
 
 Resource receipts retain each measured concurrency level, headroom observation,
 admission state, errors, and recovery. A pre-registered stop rule records higher

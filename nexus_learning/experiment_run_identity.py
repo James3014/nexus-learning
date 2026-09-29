@@ -40,6 +40,7 @@ CONSUME_BOUND_RESULT = "CONSUME_BOUND_RESULT"
 RECORD_TERMINAL_FAILURE = "RECORD_TERMINAL_FAILURE"
 NO_EFFECT_OBSERVED = "NO_EFFECT_OBSERVED"
 GENERATION_IDENTITY_MISMATCH = "GENERATION_IDENTITY_MISMATCH"
+DIFFERENT_LOGICAL_GENERATION = "DIFFERENT_LOGICAL_GENERATION"
 EFFECT_IDENTITY_CONFLICT = "EFFECT_IDENTITY_CONFLICT"
 TERMINAL_STATE_CONFLICT = "TERMINAL_STATE_CONFLICT"
 
@@ -381,7 +382,7 @@ def classify_run_observation(
         new["experiment_id"], new["experiment_generation"]
     ):
         return {
-            "classification": "DIFFERENT_LOGICAL_GENERATION",
+            "classification": DIFFERENT_LOGICAL_GENERATION,
             "requirement": None,
             "retry_authorized": False,
             "new_effect_authorized": False,

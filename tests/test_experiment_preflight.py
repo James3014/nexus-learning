@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 
 import pytest
 
@@ -35,6 +37,8 @@ from nexus_learning.experiment_preflight import (
     build_resource_observation,
     build_staged_gate_evidence,
     compare_comparator_preflights,
+    validate_cohort_preflight,
+    validate_staged_gate_evidence,
 )
 from nexus_learning.necessary_condition_stop import (
     BOUND_UPPER,
@@ -44,6 +48,13 @@ from nexus_learning.necessary_condition_stop import (
 
 HASH_A = "sha256:" + "a" * 64
 HASH_B = "sha256:" + "b" * 64
+
+
+def _rebind(payload):
+    unsigned = {key: value for key, value in payload.items() if key != "binding_hash"}
+    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload["binding_hash"] = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return payload
 
 
 def _comparator(**dimension_overrides):
@@ -165,6 +176,39 @@ def test_source_group_overlap_fails_even_when_case_ids_differ():
     assert result["cohort"]["source_group_overlap"] == ["g1"]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("experiment_id", "", "PREFLIGHT_EXPERIMENT_ID_INVALID"),
+        ("independence_unit", "UNKNOWN", "PREFLIGHT_INDEPENDENCE_UNIT_INVALID"),
+    ],
+)
+def test_cohort_validator_rejects_invalid_experiment_identity_fields(field, value, reason):
+    evidence = copy.deepcopy(_preflight())
+    evidence[field] = value
+    _rebind(evidence)
+    with pytest.raises(ValueError, match=reason):
+        validate_cohort_preflight(evidence)
+
+
+def test_cohort_validator_rejects_empty_calibration_or_holdout_split():
+    evidence = copy.deepcopy(_preflight())
+    cohort = evidence["cohort"]
+    cases = [case for case in cohort["cases"] if case["split"] == "CALIBRATION"]
+    cohort["cases"] = cases
+    cohort["case_count"] = len(cases)
+    cohort["calibration_case_count"] = len(cases)
+    cohort["holdout_case_count"] = 0
+    cohort["cohort_hash"] = "sha256:" + hashlib.sha256(
+        json.dumps(cases, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    cohort["direct_case_overlap"] = []
+    cohort["source_group_overlap"] = []
+    _rebind(evidence)
+    with pytest.raises(ValueError, match="PREFLIGHT_BOTH_SPLITS_REQUIRED"):
+        validate_cohort_preflight(evidence)
+
+
 def test_constant_answer_baseline_blocks_value_claim_but_mixed_cohort_does_not():
     constant = _preflight(cases=_cases(labels=("yes", "yes", "yes", "yes")))
     assert constant["preflight_disposition"] == PREFLIGHT_DEFER
@@ -248,6 +292,14 @@ def test_comparator_settings_and_cache_semantics_remain_explicit():
     )
     deferred = _preflight(comparator_preflight=unobserved)
     assert deferred["preflight_disposition"] == PREFLIGHT_DEFER
+
+
+def test_non_stack_comparator_mismatch_has_no_comparable_scope():
+    mismatched = _comparator(reasoning_mode={
+        "status": "MISMATCHED", "value": {"mode": "different"}, "evidence_hash": HASH_B,
+    })
+    assert mismatched["formal_comparable"] is False
+    assert mismatched["comparison_scope"] == "NOT_COMPARABLE"
 
 
 def test_auto_selected_prefill_changes_make_comparator_receipts_non_comparable():
@@ -367,6 +419,19 @@ def test_deferred_stage_observation_can_resume_with_new_bound_evidence():
     assert resumed["stage"] == STAGE_CALIBRATION
     assert resumed["observations"]["SMOKE"]["observation_id"] == "smoke-complete"
     assert any("superseded" in event.get("reason", "") for event in resumed["history"])
+
+
+@pytest.mark.parametrize(
+    ("experiment_id", "reason"),
+    [("", "STAGED_GATE_EXPERIMENT_ID_INVALID"), ("exp:another", "STAGED_GATE_EXPERIMENT_ID_MISMATCH")],
+)
+def test_staged_gate_rejects_different_or_empty_experiment_id_when_rebound(experiment_id, reason):
+    preflight = _preflight()
+    staged = copy.deepcopy(_stage(preflight))
+    staged["experiment_id"] = experiment_id
+    _rebind(staged)
+    with pytest.raises(ValueError, match=reason):
+        validate_staged_gate_evidence(staged, preflight=preflight)
 
 
 def test_preflight_defer_can_resume_only_with_updated_same_generation_evidence():

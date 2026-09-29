@@ -106,6 +106,13 @@ def _delta(changes):
     return {"changes": changes, "evidence_hash": "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()}
 
 
+def _rebind(record):
+    unsigned = {key: value for key, value in record.items() if key != "binding_hash"}
+    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    record["binding_hash"] = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return record
+
+
 def _stage_complete(preflight):
     stage = build_staged_gate_evidence(preflight=preflight)
     stage = build_staged_gate_evidence(
@@ -329,3 +336,39 @@ def test_closeout_tampering_fails_binding():
         assert "BINDING_HASH_MISMATCH" in str(exc)
     else:
         raise AssertionError("tampered closeout must fail validation")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (lambda record: record.update(campaign_id=""), "CAMPAIGN_CAMPAIGN_ID_INVALID"),
+        (lambda record: record.update(campaign_generation=True), "CAMPAIGN_CAMPAIGN_GENERATION_INVALID"),
+        (lambda record: record.update(closed_at="not-a-timestamp"), "CAMPAIGN_CLOSED_AT_INVALID"),
+        (lambda record: record.update(reopen_triggers="corrupted"), "CAMPAIGN_REOPEN_TRIGGERS_INVALID"),
+        (lambda record: record["experiment_refs"][0].update(disposition=[]), "CAMPAIGN_EXPERIMENT_DISPOSITION_INVALID"),
+        (lambda record: record["experiment_refs"][0].update(experiment_generation=True), "CAMPAIGN_EXPERIMENT_GENERATION_INVALID"),
+    ],
+)
+def test_rebound_closeout_rejects_malformed_top_level_and_reference_fields(mutation, reason):
+    record = copy.deepcopy(_closeout())
+    mutation(record)
+    _rebind(record)
+    with pytest.raises(ValueError, match=reason):
+        validate_campaign_closeout(record)
+
+
+def test_reopen_without_prior_generation_returns_the_reopen_schema_shape(monkeypatch):
+    import nexus_learning.campaign_closeout as campaign_closeout
+
+    record = _closeout()
+    record["experiment_refs"][0]["experiment_generation"] = None
+    monkeypatch.setattr(campaign_closeout, "validate_campaign_closeout", lambda _record: record)
+    result = evaluate_reopen_trigger(
+        record,
+        experiment_id="exp:occamy",
+        proposed_experiment_generation=2,
+    )
+    assert result["schema"] == "nexus.learning_calibration_campaign_reopen_evidence.v1"
+    assert result["experiment_id"] == "exp:occamy"
+    assert result["new_experiment_generation"] is None
+    assert result["claim_ceiling"]

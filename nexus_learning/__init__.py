@@ -100,6 +100,7 @@ from nexus_learning.experiment_run_identity import (
     COMPLETE as RUN_COMPLETE,
 )
 from nexus_learning.experiment_run_identity import (
+    DIFFERENT_LOGICAL_GENERATION,
     EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING,
     EXPERIMENT_RUN_IDENTITY_SCHEMA,
     TERMINAL_STATE_CONFLICT,
@@ -228,6 +229,7 @@ __all__ = [
     "RUN_COMPLETE",
     "RUN_FAILED",
     "RUN_OUTCOME_UNKNOWN",
+    "DIFFERENT_LOGICAL_GENERATION",
     "TERMINAL_STATE_CONFLICT",
     "build_experiment_run_identity",
     "validate_experiment_run_identity",

@@ -13,9 +13,15 @@ from typing import Any, Literal, Mapping, Sequence, overload
 
 from .experiment_preflight import (
     PREFLIGHT_DEFER,
+    PREFLIGHT_FAIL,
+    PREFLIGHT_PASS,
+    STAGE_CALIBRATION,
     STAGE_DEFER,
     STAGE_HARD_STOP,
     STAGE_HOLDOUT_COMPLETE,
+    STAGE_HOLDOUT_ELIGIBLE,
+    STAGE_PREFLIGHT,
+    STAGE_SMOKE,
     STAGE_STOP,
     validate_cohort_preflight,
     validate_comparator_preflight,
@@ -24,6 +30,9 @@ from .experiment_preflight import (
 from .experiment_run_identity import (
     COMPLETE,
     FAILED,
+    NOT_STARTED,
+    OUTCOME_UNKNOWN,
+    RUNNING,
     validate_experiment_run_identity,
 )
 
@@ -286,6 +295,7 @@ def build_campaign_closeout(
         raise ValueError("CAMPAIGN_EXPERIMENT_REF_DUPLICATE")
     triggers = []
     seen_triggers: set[str] = set()
+    known_experiment_ids = {item["experiment_id"] for item in projected if "experiment_id" in item}
     for raw in reopen_triggers:
         if not isinstance(raw, Mapping):
             raise ValueError("CAMPAIGN_REOPEN_TRIGGER_INVALID")
@@ -293,7 +303,7 @@ def build_campaign_closeout(
         if item["trigger_id"] in seen_triggers:
             raise ValueError("CAMPAIGN_REOPEN_TRIGGER_DUPLICATE")
         seen_triggers.add(item["trigger_id"])
-        if item["experiment_id"] not in {e.get("experiment_id") for e in projected}:
+        if item["experiment_id"] not in known_experiment_ids:
             raise ValueError("CAMPAIGN_REOPEN_TRIGGER_EXPERIMENT_UNKNOWN")
         triggers.append(item)
     triggers.sort(key=lambda item: item["trigger_id"])
@@ -330,25 +340,41 @@ def build_campaign_closeout(
 def validate_campaign_closeout(evidence: Any) -> dict[str, Any]:
     if not isinstance(evidence, Mapping) or evidence.get("schema") != CAMPAIGN_CLOSEOUT_SCHEMA:
         raise ValueError("CAMPAIGN_CLOSEOUT_SCHEMA_INVALID")
+    expected_keys = {
+        "schema", "campaign_id", "campaign_generation", "experiment_refs", "reopen_triggers",
+        "next_gate", "closed_at", "evidence_watermark", "completion_status", "incomplete_reasons",
+        "campaign_closed", "claim_ceiling", "binding_hash",
+    }
+    if set(evidence) != expected_keys:
+        raise ValueError("CAMPAIGN_CLOSEOUT_SCHEMA_INVALID")
     payload = dict(evidence)
     supplied_hash = payload.pop("binding_hash", None)
     if supplied_hash != _hash(payload):
         raise ValueError("CAMPAIGN_CLOSEOUT_BINDING_HASH_MISMATCH")
     if evidence.get("claim_ceiling") != CAMPAIGN_CLOSEOUT_CLAIM_CEILING:
         raise ValueError("CAMPAIGN_CLOSEOUT_CLAIM_CEILING_INVALID")
-    if evidence.get("completion_status") not in {CAMPAIGN_COMPLETE, CAMPAIGN_INCOMPLETE}:
+    _text(evidence.get("campaign_id"), "campaign_id")
+    _generation(evidence.get("campaign_generation"), "campaign_generation")
+    _timestamp(evidence.get("closed_at"))
+    completion_status = evidence.get("completion_status")
+    if not isinstance(completion_status, str) or completion_status not in {CAMPAIGN_COMPLETE, CAMPAIGN_INCOMPLETE}:
         raise ValueError("CAMPAIGN_CLOSEOUT_COMPLETION_STATUS_INVALID")
     reasons = evidence.get("incomplete_reasons")
-    if not isinstance(reasons, list):
+    if (
+        not isinstance(reasons, list)
+        or any(not isinstance(reason, str) or not reason.strip() for reason in reasons)
+        or reasons != sorted(set(reasons))
+    ):
         raise ValueError("CAMPAIGN_CLOSEOUT_INCOMPLETE_REASONS_INVALID")
     complete = not reasons
     if evidence.get("campaign_closed") is not complete:
         raise ValueError("CAMPAIGN_CLOSEOUT_STATE_MISMATCH")
     if evidence.get("completion_status") != (CAMPAIGN_COMPLETE if complete else CAMPAIGN_INCOMPLETE):
         raise ValueError("CAMPAIGN_CLOSEOUT_STATUS_MISMATCH")
-    if evidence.get("next_gate") == NO_GATE_DEFINED:
+    next_gate = evidence.get("next_gate")
+    if next_gate == NO_GATE_DEFINED:
         pass
-    elif not isinstance(evidence.get("next_gate"), str) or len(evidence["next_gate"]) < 8 or " " in evidence["next_gate"]:
+    elif not isinstance(next_gate, str) or not next_gate.strip() or len(next_gate) < 8 or " " in next_gate:
         raise ValueError("CAMPAIGN_NEXT_GATE_INVALID")
     refs = evidence.get("experiment_refs")
     if not isinstance(refs, list) or not refs:
@@ -361,15 +387,81 @@ def validate_campaign_closeout(evidence: Any) -> dict[str, Any]:
         "highest_safe_claim", "not_proven",
         "correctness_certification",
     }
+    allowed_ref_keys = required_for_complete | {
+        "experiment_ref", "result_receipt_sha256", "preflight_disposition", "staged_gate_binding_hash",
+        "staged_gate_stage", "staged_gate_terminal", "necessary_condition_stop_binding_hash",
+        "performance_cannot_override_correctness",
+    }
+    required_ref_keys = {
+        "experiment_ref", "not_proven", "correctness_certification",
+        "performance_cannot_override_correctness",
+    }
     ref_ids: set[str] = set()
     for ref in refs:
-        if not isinstance(ref, Mapping) or not isinstance(ref.get("not_proven"), list):
+        if (
+            not isinstance(ref, Mapping)
+            or not set(ref).issubset(allowed_ref_keys)
+            or not required_ref_keys.issubset(ref)
+            or not isinstance(ref.get("not_proven"), list)
+            or any(not isinstance(item, str) or not item.strip() for item in ref["not_proven"])
+            or ref.get("not_proven") != sorted(set(ref.get("not_proven", [])))
+        ):
             raise ValueError("CAMPAIGN_EXPERIMENT_REF_INVALID")
-        if not isinstance(ref.get("experiment_ref"), str) or ref["experiment_ref"] in ref_ids:
+        if not isinstance(ref.get("experiment_ref"), str) or not ref["experiment_ref"].strip() or ref["experiment_ref"] in ref_ids:
             raise ValueError("CAMPAIGN_EXPERIMENT_REF_INVALID")
         ref_ids.add(ref["experiment_ref"])
+        if "experiment_id" in ref:
+            _text(ref["experiment_id"], "experiment_id")
+        if "experiment_generation" in ref and ref["experiment_generation"] is not None:
+            _generation(ref["experiment_generation"], "experiment_generation")
+        if "run_state" in ref and (
+            not isinstance(ref["run_state"], str)
+            or ref["run_state"] not in {NOT_STARTED, RUNNING, COMPLETE, FAILED, OUTCOME_UNKNOWN}
+        ):
+            raise ValueError("CAMPAIGN_EXPERIMENT_RUN_STATE_INVALID")
+        if "run_binding_hash" in ref and ref["run_binding_hash"] is not None and not _is_hash(ref["run_binding_hash"]):
+            raise ValueError("CAMPAIGN_RUN_BINDING_HASH_INVALID")
+        if "result_receipt_identity" in ref and ref["result_receipt_identity"] is not None:
+            _text(ref["result_receipt_identity"], "result_receipt_identity")
         if ref.get("result_receipt_sha256") is not None and not _is_hash(ref["result_receipt_sha256"]):
             raise ValueError("CAMPAIGN_RESULT_RECEIPT_HASH_INVALID")
+        if "preflight_binding_hash" in ref and ref["preflight_binding_hash"] is not None and not _is_hash(ref["preflight_binding_hash"]):
+            raise ValueError("CAMPAIGN_PREFLIGHT_BINDING_HASH_INVALID")
+        if "preflight_disposition" in ref and (
+            not isinstance(ref["preflight_disposition"], str)
+            or ref["preflight_disposition"] not in {PREFLIGHT_PASS, PREFLIGHT_FAIL, PREFLIGHT_DEFER}
+        ):
+            raise ValueError("CAMPAIGN_PREFLIGHT_DISPOSITION_INVALID")
+        if "staged_gate_binding_hash" in ref and ref["staged_gate_binding_hash"] is not None and not _is_hash(ref["staged_gate_binding_hash"]):
+            raise ValueError("CAMPAIGN_STAGED_GATE_BINDING_HASH_INVALID")
+        if "staged_gate_stage" in ref and ref["staged_gate_stage"] is not None and (
+            not isinstance(ref["staged_gate_stage"], str)
+            or ref["staged_gate_stage"] not in {
+                STAGE_STOP, STAGE_HARD_STOP, STAGE_HOLDOUT_COMPLETE, STAGE_DEFER,
+                STAGE_PREFLIGHT, STAGE_SMOKE, STAGE_CALIBRATION, STAGE_HOLDOUT_ELIGIBLE,
+            }
+        ):
+            raise ValueError("CAMPAIGN_STAGED_GATE_STAGE_INVALID")
+        if "staged_gate_terminal" in ref and not isinstance(ref["staged_gate_terminal"], bool):
+            raise ValueError("CAMPAIGN_STAGED_GATE_TERMINAL_INVALID")
+        if "necessary_condition_stop_binding_hash" in ref and ref["necessary_condition_stop_binding_hash"] is not None and not _is_sha256_digest(ref["necessary_condition_stop_binding_hash"]):
+            raise ValueError("CAMPAIGN_NECESSARY_STOP_BINDING_INVALID")
+        if "disposition" in ref:
+            _text(ref["disposition"], "experiment_disposition")
+        if "highest_safe_claim" in ref:
+            _text(ref["highest_safe_claim"], "highest_safe_claim")
+        correctness_ref = ref["correctness_certification"]
+        if (
+            not isinstance(correctness_ref, Mapping)
+            or set(correctness_ref) != {"status", "evidence_hash"}
+            or not isinstance(correctness_ref.get("status"), str)
+            or correctness_ref.get("status") not in {"PASS", "FAIL", "NOT_EVALUATED", "UNSUPPORTED"}
+            or (correctness_ref.get("evidence_hash") is not None and not _is_hash(correctness_ref.get("evidence_hash")))
+            or (correctness_ref.get("status") == "PASS" and not _is_hash(correctness_ref.get("evidence_hash")))
+        ):
+            raise ValueError("CAMPAIGN_CORRECTNESS_CERTIFICATION_INVALID")
+        if ref["performance_cannot_override_correctness"] is not True:
+            raise ValueError("CAMPAIGN_CORRECTNESS_BOUNDARY_INVALID")
         if complete:
             if not required_for_complete.issubset(ref):
                 raise ValueError("CAMPAIGN_COMPLETE_WITH_INCOMPLETE_EXPERIMENT_REF")
@@ -400,13 +492,33 @@ def validate_campaign_closeout(evidence: Any) -> dict[str, Any]:
                 raise ValueError("CAMPAIGN_CORRECTNESS_CERTIFICATION_INVALID")
             if correctness.get("status") == "PASS" and not _is_hash(correctness.get("evidence_hash")):
                 raise ValueError("CAMPAIGN_CORRECTNESS_CERTIFICATION_HASH_REQUIRED")
-            if ref.get("preflight_disposition") not in {"PASS", "FAIL", "DEFER"}:
+            if ref.get("preflight_disposition") not in {PREFLIGHT_PASS, PREFLIGHT_FAIL, PREFLIGHT_DEFER}:
                 raise ValueError("CAMPAIGN_PREFLIGHT_DISPOSITION_INVALID")
-    if complete and not isinstance(evidence.get("incomplete_reasons"), list):
-        raise ValueError("CAMPAIGN_COMPLETE_WITH_INCOMPLETE_REASONS")
+            if not isinstance(ref["experiment_id"], str) or not ref["experiment_id"].strip():
+                raise ValueError("CAMPAIGN_EXPERIMENT_ID_INVALID")
+            _generation(ref["experiment_generation"], "experiment_generation")
     watermark = evidence.get("evidence_watermark")
-    if not isinstance(watermark, Mapping) or not isinstance(watermark.get("source_ref"), str) or not _is_hash(watermark.get("sha256")):
+    if (
+        not isinstance(watermark, Mapping)
+        or not isinstance(watermark.get("source_ref"), str)
+        or not watermark["source_ref"].strip()
+        or not _is_hash(watermark.get("sha256"))
+    ):
         raise ValueError("CAMPAIGN_EVIDENCE_WATERMARK_INVALID")
+    triggers = evidence.get("reopen_triggers")
+    if not isinstance(triggers, list):
+        raise ValueError("CAMPAIGN_REOPEN_TRIGGERS_INVALID")
+    seen_trigger_ids: set[str] = set()
+    known_experiment_ids = {ref["experiment_id"] for ref in refs if isinstance(ref.get("experiment_id"), str)}
+    for trigger in triggers:
+        if not isinstance(trigger, Mapping):
+            raise ValueError("CAMPAIGN_REOPEN_TRIGGER_INVALID")
+        normalized = _normalize_trigger(trigger)
+        if dict(trigger) != normalized or normalized["trigger_id"] in seen_trigger_ids:
+            raise ValueError("CAMPAIGN_REOPEN_TRIGGER_INVALID")
+        if normalized["experiment_id"] not in known_experiment_ids:
+            raise ValueError("CAMPAIGN_REOPEN_TRIGGER_EXPERIMENT_UNKNOWN")
+        seen_trigger_ids.add(normalized["trigger_id"])
     return dict(evidence)
 
 
@@ -427,10 +539,28 @@ def evaluate_reopen_trigger(
     refs = [item for item in record["experiment_refs"] if item.get("experiment_id") == experiment_id]
     if not refs:
         raise ValueError("CAMPAIGN_REOPEN_EXPERIMENT_UNKNOWN")
-    previous_generations = [item.get("experiment_generation") for item in refs if isinstance(item.get("experiment_generation"), int)]
+    previous_generations = [
+        item.get("experiment_generation")
+        for item in refs
+        if isinstance(item.get("experiment_generation"), int)
+        and not isinstance(item.get("experiment_generation"), bool)
+    ]
     if not previous_generations:
-        return {"eligible": False, "reason": "prior run generation missing", "matched_trigger_id": None,
-                "prior_closeout_binding_hash": record["binding_hash"], "new_generation": None}
+        return {
+            "schema": CAMPAIGN_REOPEN_SCHEMA,
+            "eligible": False,
+            "experiment_id": experiment_id,
+            "matched_trigger_id": None,
+            "prior_closeout_binding_hash": record["binding_hash"],
+            "prior_receipt_hashes": sorted(
+                item["result_receipt_sha256"] for item in record["experiment_refs"]
+                if item.get("result_receipt_sha256")
+            ),
+            "new_experiment_generation": None,
+            "trigger_evidence_hash": None,
+            "reason": "prior run generation missing",
+            "claim_ceiling": CAMPAIGN_CLOSEOUT_CLAIM_CEILING,
+        }
     if proposed_generation <= max(previous_generations):
         raise ValueError("CAMPAIGN_REOPEN_REQUIRES_NEW_EXPERIMENT_GENERATION")
     changes = evidence_delta.get("changes") if isinstance(evidence_delta, Mapping) else None
