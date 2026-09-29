@@ -605,7 +605,12 @@ def evaluate_reopen_trigger(
         "experiment_id": experiment_id,
         "matched_trigger_id": None,
         "prior_closeout_binding_hash": record["binding_hash"],
+        "prior_receipt_hashes": sorted(
+            item["result_receipt_sha256"] for item in record["experiment_refs"]
+            if item.get("result_receipt_sha256")
+        ),
         "new_experiment_generation": None,
+        "trigger_evidence_hash": None,
         "reason": "no recorded evidence-bound reopen trigger matched",
         "claim_ceiling": CAMPAIGN_CLOSEOUT_CLAIM_CEILING,
     }

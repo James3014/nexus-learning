@@ -247,6 +247,10 @@ def test_unrelated_delta_does_not_reopen_closed_experiment():
     )
     assert reopened["eligible"] is False
     assert reopened["matched_trigger_id"] is None
+    assert reopened["prior_receipt_hashes"] == sorted(
+        item["result_receipt_sha256"] for item in record["experiment_refs"]
+    )
+    assert reopened["trigger_evidence_hash"] is None
 
 
 def test_reopen_delta_hash_must_bind_the_exact_change_payload():
