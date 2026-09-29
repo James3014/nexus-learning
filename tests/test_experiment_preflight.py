@@ -180,7 +180,9 @@ def test_source_group_overlap_fails_even_when_case_ids_differ():
     ("field", "value", "reason"),
     [
         ("experiment_id", "", "PREFLIGHT_EXPERIMENT_ID_INVALID"),
+        ("experiment_id", [], "PREFLIGHT_EXPERIMENT_ID_INVALID"),
         ("independence_unit", "UNKNOWN", "PREFLIGHT_INDEPENDENCE_UNIT_INVALID"),
+        ("independence_unit", [], "PREFLIGHT_INDEPENDENCE_UNIT_INVALID"),
     ],
 )
 def test_cohort_validator_rejects_invalid_experiment_identity_fields(field, value, reason):
