@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Mapping
 
 PREFLIGHT_SCHEMA = "nexus.learning_cohort_preflight.v1"
@@ -64,7 +65,7 @@ def build_cohort_preflight(
         raise ValueError("incumbent_identity must be a mapping")
     incumbent_identity = dict(incumbent_identity)
     for key in ("deterministic_kind", "result_hash"):
-        if key not in incumbent_identity:
+        if not isinstance(incumbent_identity.get(key), str) or not incumbent_identity[key].strip():
             raise ValueError(f"incumbent_identity missing {key}")
     if incumbent_result not in DISPOSITIONS:
         raise ValueError("incumbent_result must be a known disposition")
@@ -90,7 +91,7 @@ def build_cohort_preflight(
     for key in ROLE_SAFETY_METRICS:
         if key in role_metrics:
             value = role_metrics[key]
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
                 raise ValueError(f"role metric {key} must be numeric")
             metrics[key] = float(value)
     coverage = dict(candidate_coverage or {})
@@ -105,15 +106,18 @@ def build_cohort_preflight(
             stop_loss_triggered = True
     eligible = (
         incumbent_result in (DISPOSITION_PASS, DISPOSITION_FAILED, DISPOSITION_STOPPED_BY_GATE)
-        and bool(metrics)
+        and bool(set(metrics) - {"accuracy"})
         and not stop_loss_triggered
+        and all(level["disposition"] == DISPOSITION_PASS for level in levels)
     )
     gaps = []
-    if not metrics:
+    if not set(metrics) - {"accuracy"}:
         gaps.append("role safety metrics missing; accuracy alone is insufficient")
+    if any(level["disposition"] != DISPOSITION_PASS for level in levels):
+        gaps.append("candidate stage has not passed; no holdout admission")
     if stop_loss_triggered:
         gaps.append("stop-loss: two adjacent levels failed for the same mechanism reason")
-    if coverage and not coverage.get("candidates_cover_reranker_claims", True):
+    if (coverage or any("rerank" in level["mechanism"].lower() for level in levels)) and coverage.get("candidates_cover_reranker_claims") is not True:
         gaps.append("candidate-coverage precondition unmet for reranker/model claims")
         eligible = False
     body = {
@@ -126,6 +130,7 @@ def build_cohort_preflight(
         "candidate_coverage": coverage,
         "stop_loss_triggered": stop_loss_triggered,
         "eligible": eligible,
+        "eligibility_scope": "RECORDED_PREREQUISITES_ONLY_NOT_HOLDOUT_ADMISSION",
         "evidence_gaps": gaps,
         "claim_ceiling": PREFLIGHT_CLAIM_CEILING,
     }
@@ -134,9 +139,13 @@ def build_cohort_preflight(
 
 
 def build_campaign_closeout(
-    *, campaign_id, closed_experiments, highest_safe_claims, not_proven, reopen_triggers
+    *, campaign_id, closed_experiments, highest_safe_claims, not_proven, reopen_triggers,
+    campaign_generation=1, next_gate="NONE_DEFINED", closed_at=None, evidence_watermark=None
 ):
     campaign_id = _text(campaign_id, "campaign_id")
+    if type(campaign_generation) is not int or campaign_generation < 1:
+        raise ValueError("campaign_generation must be a positive integer")
+    next_gate = _text(next_gate, "next_gate")
     if not isinstance(closed_experiments, (list, tuple)) or not closed_experiments:
         raise ValueError("closed_experiments must be a non-empty list")
     closed = []
@@ -172,12 +181,29 @@ def build_campaign_closeout(
     body = {
         "schema": CLOSEOUT_SCHEMA,
         "campaign_id": campaign_id,
+        "campaign_generation": campaign_generation,
+        "next_gate": next_gate,
+        "closed_at": closed_at,
+        "evidence_watermark": evidence_watermark,
         "closed_experiments": closed,
         "highest_safe_claims": dict(highest_safe_claims or {}),
         "not_proven": list(not_proven or []),
         "reopen_triggers": triggers,
         "claim_ceiling": CLOSEOUT_CLAIM_CEILING,
     }
+    gaps = []
+    for entry in closed:
+        digest = entry.get("receipt_sha256")
+        if not isinstance(digest, str) or len(digest.removeprefix("sha256:")) != 64 or any(c not in "0123456789abcdef" for c in digest.removeprefix("sha256:")):
+            gaps.append(f"missing or invalid receipt hash: {entry['experiment_id']}")
+        if entry["disposition"] == DISPOSITION_NOT_EVALUATED:
+            gaps.append(f"experiment not terminal: {entry['experiment_id']}")
+        if not entry.get("highest_safe_claim"):
+            gaps.append(f"highest safe claim missing: {entry['experiment_id']}")
+    if not closed_at or not evidence_watermark:
+        gaps.append("closeout time or evidence watermark missing")
+    body["evidence_gaps"] = gaps
+    body["complete"] = not gaps
     body["content_sha256"] = _hash({k: v for k, v in body.items() if k != "content_sha256"})
     return body
 
@@ -187,8 +213,13 @@ def verify_preflight(body):
         return False
     if body.get("claim_ceiling") != PREFLIGHT_CLAIM_CEILING:
         return False
-    unsigned = {k: v for k, v in body.items() if k != "content_sha256"}
-    return _hash(unsigned) == body.get("content_sha256")
+    try:
+        recomputed = build_cohort_preflight(**{k: body[k] for k in (
+            "cohort_id", "incumbent_identity", "incumbent_result", "candidate_levels",
+            "role_metrics", "candidate_coverage")})
+        return dict(body) == recomputed
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
 
 
 def verify_closeout(body):
@@ -196,5 +227,11 @@ def verify_closeout(body):
         return False
     if body.get("claim_ceiling") != CLOSEOUT_CLAIM_CEILING:
         return False
-    unsigned = {k: v for k, v in body.items() if k != "content_sha256"}
-    return _hash(unsigned) == body.get("content_sha256")
+    try:
+        recomputed = build_campaign_closeout(**{k: body[k] for k in (
+            "campaign_id", "closed_experiments", "highest_safe_claims", "not_proven",
+            "reopen_triggers", "campaign_generation", "next_gate", "closed_at",
+            "evidence_watermark")})
+        return dict(body) == recomputed
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False

@@ -26,10 +26,10 @@ def _preflight(**overrides):
             {
                 "level_id": "2b",
                 "mechanism": "generative_extract",
-                "disposition": "FAILED",
-                "failure_reason": "false_safe",
+                "disposition": "PASS",
+                "failure_reason": None,
             },
-            {"level_id": "4b", "mechanism": "generative_extract", "disposition": "NOT_EVALUATED"},
+            {"level_id": "4b", "mechanism": "generative_extract", "disposition": "PASS"},
         ],
         "role_metrics": {"false_safe_rate": 0.12, "unknown_recall": 0.8, "accuracy": 0.9},
         "candidate_coverage": {"candidates_cover_reranker_claims": True},
@@ -48,6 +48,7 @@ def test_preflight_eligible_with_incumbent_and_metrics():
 def test_preflight_requires_role_metrics_not_accuracy_alone():
     body = _preflight(role_metrics={"accuracy": 0.95})
     assert body["role_metrics"] == {"accuracy": 0.95}
+    assert body["eligible"] is False
     # accuracy-only cohort stays ineligible until safety metrics arrive
     body2 = _preflight(role_metrics={})
     assert body2["eligible"] is False
