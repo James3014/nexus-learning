@@ -99,6 +99,15 @@ from nexus_learning.state_root import (
     LearningStateRoot,
     resolve_learning_state_root,
 )
+from nexus_learning.workflow_friction import (
+    WORKFLOW_FRICTION_SCHEMA,
+    WORKFLOW_RECOMMENDATION_SCHEMA,
+    WORKFLOW_VALIDATION_SCHEMA,
+    build_friction_observation,
+    build_workflow_recommendation,
+    validate_friction_observation,
+    validate_workflow_recommendation,
+)
 
 __all__ = [
     "NEXUS_LEARNING_EPISODE_SCHEMA",
@@ -180,4 +189,11 @@ __all__ = [
     "AuditEntry",
     "LearningStateRoot",
     "resolve_learning_state_root",
+    "WORKFLOW_FRICTION_SCHEMA",
+    "WORKFLOW_RECOMMENDATION_SCHEMA",
+    "WORKFLOW_VALIDATION_SCHEMA",
+    "build_friction_observation",
+    "validate_friction_observation",
+    "build_workflow_recommendation",
+    "validate_workflow_recommendation",
 ]
