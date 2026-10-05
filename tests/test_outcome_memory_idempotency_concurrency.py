@@ -26,6 +26,43 @@ def _record() -> EpisodeOutcomeRecord:
     )
 
 
+def test_missing_explicit_idempotency_key_uses_stable_fallback_and_dedupes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        OutcomeMemoryManager,
+        "run_dynamic_autotune_sync",
+        classmethod(lambda cls, **kwargs: {"status": "PASS"}),
+    )
+    record = EpisodeOutcomeRecord.from_task(
+        task_id="fallback-task",
+        task_type="repair",
+        task_desc="stable fallback idempotency",
+        solved=True,
+        wall_duration_sec=1.0,
+        total_tokens_used=10,
+        trust_mismatch=False,
+        attempt_id="attempt-1",
+        action_id="action-1",
+        idempotency_key="",
+        terminal_outcome="SUCCEEDED",
+        qualification_evidence_present=True,
+    )
+
+    assert record.idempotency_key == "fallback-task:attempt-1:action-1"
+
+    first = OutcomeMemoryManager.save_episode_and_tune_sync(record, project_root=tmp_path)
+    second = OutcomeMemoryManager.save_episode_and_tune_sync(record, project_root=tmp_path)
+
+    assert [first["status"], second["status"]] == ["PASS", "IDEMPOTENT_DUPLICATE"]
+    storage = tmp_path / ".nexus" / "memory" / "outcome_history.jsonl"
+    rows = [json.loads(line) for line in storage.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["episode_id"] == record.episode_id
+    assert rows[0]["idempotency_key"] == record.idempotency_key
+
+
 def test_same_key_concurrent_writers_append_exactly_once(
     tmp_path: Path,
     monkeypatch,
