@@ -1,6 +1,42 @@
-version = 1
+version = 2
 base_ref = "origin/main"
 allowed_patterns = ["**"]
 deletion_policy = "FORBID"
-verifier_command = ["uv", "run", "pytest", "-q"]
+universe_generation = 1
+materials = []
+
+[[verifiers]]
+id = "pytest"
+command = ["uv", "run", "pytest", "-q"]
 timeout_seconds = 1800
+logical_subject_id = "learning/full-tests"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "ruff"
+command = ["uv", "run", "ruff", "check", "nexus_learning", "tests"]
+timeout_seconds = 600
+logical_subject_id = "learning/ruff"
+evidence_kind = "static-analysis"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "pyright"
+command = ["uv", "run", "pyright", "nexus_learning"]
+timeout_seconds = 600
+logical_subject_id = "learning/pyright"
+evidence_kind = "static-analysis"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "installed-wheel-smoke"
+command = ["uv", "run", "pytest", "-q", "tests/test_installed_wheel_smoke.py"]
+timeout_seconds = 1200
+logical_subject_id = "learning/installed-wheel-smoke"
+evidence_kind = "package-smoke"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
