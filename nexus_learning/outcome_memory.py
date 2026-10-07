@@ -176,7 +176,7 @@ class EpisodeOutcomeRecord:
             created_at=created_at or datetime.now(timezone.utc).isoformat(),
             attempt_id=str(attempt_id or ""),
             action_id=str(action_id or ""),
-            idempotency_key=str(idempotency_key or ""),
+            idempotency_key=stable_identity,
             terminal_outcome=normalized_terminal,
             auto_replay_allowed=bool(auto_replay_allowed) and qualified,
             qualification_status="QUALIFIED" if qualified else "UNQUALIFIED",
