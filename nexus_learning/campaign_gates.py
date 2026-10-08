@@ -1,4 +1,7 @@
-"""Staged cohort preflight + campaign closeout/reopen evidence (#31/#32)."""
+"""Staged cohort preflight + campaign closeout/reopen evidence (#31/#32).
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,8 @@ import hashlib
 import json
 import math
 from typing import Any, Mapping, Sequence
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 PREFLIGHT_SCHEMA = "nexus.learning_cohort_preflight.v1"
 PREFLIGHT_CLAIM_CEILING = "LEARNING_COHORT_PREFLIGHT_STAGED_GATE_ONLY"

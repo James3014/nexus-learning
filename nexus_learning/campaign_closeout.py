@@ -2,6 +2,8 @@
 
 This is a small immutable index over run/preflight evidence.  It is not an
 experiment registry, benchmark runner, model ranker, or runtime admission gate.
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ from .experiment_run_identity import (
     RUNNING,
     validate_experiment_run_identity,
 )
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 CAMPAIGN_CLOSEOUT_SCHEMA = "nexus.learning_calibration_campaign_closeout.v1"
 CAMPAIGN_REOPEN_SCHEMA = "nexus.learning_calibration_campaign_reopen_evidence.v1"

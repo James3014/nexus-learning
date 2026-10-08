@@ -2,6 +2,8 @@
 
 Nexus Learning is the standalone evidence-bounded learning and adaptation system extracted from Nexus-new.
 
+The package is the single owner for the Storage, Reflection, Measurement and Adoption stages of the learning loop. Retrieval is a read-only port in nexus-runtime, not part of this package. Research-governance modules are frozen (bug fixes only) and have no consumer outside this repository. See [Architecture Boundary (v2)](docs/architecture/BOUNDARY.md) for stage ownership and invariants.
+
 ## Lifecycle Boundary
 
 ```text

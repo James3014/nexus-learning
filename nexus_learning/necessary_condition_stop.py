@@ -7,6 +7,8 @@ that one condition is mathematically non-rescuable.
 
 It does not replace experiment integrity, quality-qualified economics,
 verification, adoption, route/model selection, or production authority.
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 from .experiment_integrity import validate_experiment_integrity
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 NECESSARY_CONDITION_STOP_SCHEMA = (
     "nexus.learning_negative_necessary_condition_stop.v1"
