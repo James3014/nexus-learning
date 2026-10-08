@@ -425,7 +425,6 @@ def test_build_lesson_bounds_text_and_lists() -> None:
         validate_lesson(forged)
 
 
-
 _FULL_QUALIFICATION = {
     "status": "QUALIFIED",
     "repeatability": {"verifier_status": "fail"},
@@ -542,7 +541,9 @@ def test_validator_rejects_parked_qualification_without_verifier_failure() -> No
         qualification=None,
     )
     forged["stages"] = dict(forged["stages"], outcome_measured=True)
-    with pytest.raises(ValueError, match="NEXUS_LEARNING_EPISODE_PARKED_MEASURED_WITHOUT_VERIFIER_FAILURE"):
+    with pytest.raises(
+        ValueError, match="NEXUS_LEARNING_EPISODE_PARKED_MEASURED_WITHOUT_VERIFIER_FAILURE"
+    ):
         validate_nexus_learning_episode(forged)
 
 
@@ -566,7 +567,7 @@ def test_retrieve_stems_inflections_to_match_lessons() -> None:
     assert [row["lesson_id"] for row in rows] == [receipt["lesson_id"]]
     assert "rounding" in rows[0]["summary"]
     # shares~shar, split and totals~total: three stemmed matches over seven query stems.
-    assert rows[0]["relevance_score"] == pytest.approx(3 / 7)
+    assert rows[0]["relevance_score"] == pytest.approx(3 / 5)  # 5 query stems after stopwords
 
 
 def test_retrieve_tag_match_outranks_equal_body_overlap() -> None:
@@ -590,15 +591,13 @@ def test_retrieve_tag_match_outranks_equal_body_overlap() -> None:
 
 def test_judge_keywords_become_normalized_tags() -> None:
     keywords = [" Rounding ", "HALF-EVEN", "", "total", "x" * 50] + [f"k{i}" for i in range(12)]
-    reply = json.dumps(
-        {
-            "title": "Round half-even",
-            "lesson": "Use half-even rounding for splits.",
-            "applies_when": ["split"],
-            "avoid_when": [],
-            "keywords": keywords,
-        }
-    )
+    reply = json.dumps({
+        "title": "Round half-even",
+        "lesson": "Use half-even rounding for splits.",
+        "applies_when": ["split"],
+        "avoid_when": [],
+        "keywords": keywords,
+    })
     lessons = reflect_episodes([_episode("task-kw")], judge=_FakeJudge(reply))
     assert lessons[0]["reflector"]["kind"] == "judge"
     assert len(lessons[0]["tags"]) == 12

@@ -81,8 +81,73 @@ def _stem(token: str) -> str:
     return word
 
 
+_STOPWORDS = frozenset({
+    "the",
+    "and",
+    "for",
+    "that",
+    "this",
+    "with",
+    "from",
+    "are",
+    "was",
+    "were",
+    "when",
+    "which",
+    "while",
+    "should",
+    "would",
+    "could",
+    "will",
+    "not",
+    "but",
+    "its",
+    "into",
+    "than",
+    "then",
+    "they",
+    "them",
+    "there",
+    "their",
+    "have",
+    "has",
+    "had",
+    "been",
+    "being",
+    "also",
+    "only",
+    "all",
+    "any",
+    "each",
+    "such",
+    "use",
+    "used",
+    "using",
+    "returns",
+    "return",
+    "instead",
+    "always",
+    "never",
+    "must",
+    "does",
+    "did",
+    "where",
+    "what",
+    "how",
+    "why",
+    "can",
+    "may",
+    "one",
+    "two",
+    "value",
+    "values",
+    "function",
+})
+
+
 def _stems(text: str) -> set[str]:
-    return {_stem(token) for token in _tokens(text)}
+    """Stemmed, stopword-free tokens for retrieval matching."""
+    return {_stem(token) for token in _tokens(text) if token not in _STOPWORDS}
 
 
 def _clamp_confidence(value: Any) -> float:
@@ -187,7 +252,10 @@ def validate_lesson(lesson: Mapping[str, Any]) -> None:
         raise ValueError("LESSON_SCHEMA_MISMATCH")
     if not _text(lesson.get("title")) or not _text(lesson.get("lesson_body")):
         raise ValueError("LESSON_CONTENT_REQUIRED")
-    if len(_text(lesson.get("lesson_body"))) > _BODY_MAX or len(_text(lesson.get("title"))) > _TITLE_MAX:
+    if (
+        len(_text(lesson.get("lesson_body"))) > _BODY_MAX
+        or len(_text(lesson.get("title"))) > _TITLE_MAX
+    ):
         raise ValueError("LESSON_CONTENT_TOO_LONG")
     for key in ("applies_when", "avoid_when"):
         items = lesson.get(key) or []
@@ -320,14 +388,12 @@ def retrieve_lessons(
         if require_physical and not lesson.get("retrieval_eligible"):
             continue
         body_stems = _stems(
-            " ".join(
-                [
-                    _text(lesson.get("title")),
-                    _text(lesson.get("lesson_body")),
-                    " ".join(_text(item) for item in lesson.get("applies_when") or []),
-                    " ".join(_text(item) for item in lesson.get("avoid_when") or []),
-                ]
-            )
+            " ".join([
+                _text(lesson.get("title")),
+                _text(lesson.get("lesson_body")),
+                " ".join(_text(item) for item in lesson.get("applies_when") or []),
+                " ".join(_text(item) for item in lesson.get("avoid_when") or []),
+            ])
         )
         tag_stems = _stems(" ".join(_text(item) for item in lesson.get("tags") or []))
         score = len(query & body_stems) + 2 * len(query & tag_stems)
@@ -341,23 +407,21 @@ def retrieve_lessons(
     rows: list[dict[str, Any]] = []
     for score, lesson in matches[:limit]:
         polarity = _text(lesson.get("outcome_polarity"))
-        rows.append(
-            {
-                "lesson_id": _text(lesson.get("lesson_id")),
-                "summary": _text(lesson.get("lesson_body")),
-                "title": _text(lesson.get("title")),
-                "classification": polarity,
-                "pattern_type": polarity,
-                "source": "nexus_learning.lessons",
-                "relevance_score": min(1.0, score / max(1, len(query))),
-                "applies_when": list(lesson.get("applies_when") or []),
-                "avoid_when": list(lesson.get("avoid_when") or []),
-                "evidence_refs": list(lesson.get("evidence_refs") or []),
-                "source_episode_ids": list(lesson.get("source_episode_ids") or []),
-                "confidence": _as_float(lesson.get("confidence")),
-                "provenance": "canonical_lesson",
-            }
-        )
+        rows.append({
+            "lesson_id": _text(lesson.get("lesson_id")),
+            "summary": _text(lesson.get("lesson_body")),
+            "title": _text(lesson.get("title")),
+            "classification": polarity,
+            "pattern_type": polarity,
+            "source": "nexus_learning.lessons",
+            "relevance_score": min(1.0, score / max(1, len(query))),
+            "applies_when": list(lesson.get("applies_when") or []),
+            "avoid_when": list(lesson.get("avoid_when") or []),
+            "evidence_refs": list(lesson.get("evidence_refs") or []),
+            "source_episode_ids": list(lesson.get("source_episode_ids") or []),
+            "confidence": _as_float(lesson.get("confidence")),
+            "provenance": "canonical_lesson",
+        })
     return rows
 
 
@@ -408,8 +472,13 @@ def _verifier_failed(episode: Mapping[str, Any]) -> bool:
     lesson. It does not change the episode's lifecycle state.
     """
     qualification = episode.get("qualification")
-    repeatability = qualification.get("repeatability") if isinstance(qualification, Mapping) else None
-    if isinstance(repeatability, Mapping) and _text(repeatability.get("verifier_status")).lower() == "fail":
+    repeatability = (
+        qualification.get("repeatability") if isinstance(qualification, Mapping) else None
+    )
+    if (
+        isinstance(repeatability, Mapping)
+        and _text(repeatability.get("verifier_status")).lower() == "fail"
+    ):
         return True
     return explicit_verifier_failure(episode.get("terminal_evidence"))
 
@@ -553,7 +622,10 @@ def _deterministic_lesson(
         confidence=_DETERMINISTIC_CONFIDENCE,
         tags=_normalize_tags(
             [f"task:{task_id}" for task_id in task_ids]
-            + [f"source:{source}" for source in _unique_ordered(_episode_source(ep) for ep in group)]
+            + [
+                f"source:{source}"
+                for source in _unique_ordered(_episode_source(ep) for ep in group)
+            ]
         ),
         reflector={
             "kind": REFLECTOR_KIND_DETERMINISTIC,
