@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from nexus_learning.adoption import (
+    ADOPTION_DECISION_ADOPT,
+    ADOPTION_DECISION_DEFER,
+    ADOPTION_DECISION_REJECT,
+    ADOPTION_PIPELINE_SCHEMA,
+    AdoptionStore,
+    build_adoption_from_scorecard,
+)
 from nexus_learning.campaign_closeout import (
     CAMPAIGN_CLOSEOUT_CLAIM_CEILING,
     CAMPAIGN_CLOSEOUT_SCHEMA,
@@ -185,6 +193,12 @@ from nexus_learning.workflow_friction import (
 )
 
 __all__ = [
+    "ADOPTION_DECISION_ADOPT",
+    "ADOPTION_DECISION_DEFER",
+    "ADOPTION_DECISION_REJECT",
+    "ADOPTION_PIPELINE_SCHEMA",
+    "AdoptionStore",
+    "build_adoption_from_scorecard",
     "NEXUS_LEARNING_EPISODE_SCHEMA",
     "RUNTIME_LEARNING_CLOSURE_SCHEMA",
     "LEARNING_POLICY_RECOMMENDATION_SCHEMA",
