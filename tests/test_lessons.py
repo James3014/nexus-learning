@@ -544,3 +544,86 @@ def test_validator_rejects_parked_qualification_without_verifier_failure() -> No
     forged["stages"] = dict(forged["stages"], outcome_measured=True)
     with pytest.raises(ValueError, match="NEXUS_LEARNING_EPISODE_PARKED_MEASURED_WITHOUT_VERIFIER_FAILURE"):
         validate_nexus_learning_episode(forged)
+
+
+def test_retrieve_stems_inflections_to_match_lessons() -> None:
+    receipt = _base_lesson(
+        title="Round split shares",
+        lesson_body="Round each share to cents with half-even rounding so parts sum evenly.",
+        applies_when=["Calculating totals in receipts"],
+        source_episode_ids=["lep:stem-a"],
+    )
+    unrelated = _base_lesson(
+        title="Deploy checklist",
+        lesson_body="Verify staging rollout before promoting release.",
+        applies_when=["release window"],
+        source_episode_ids=["lep:stem-b"],
+    )
+    rows = retrieve_lessons(
+        [unrelated, receipt],
+        query_text="shares of a split should add up exactly to the total",
+    )
+    assert [row["lesson_id"] for row in rows] == [receipt["lesson_id"]]
+    assert "rounding" in rows[0]["summary"]
+    # shares~shar, split and totals~total: three stemmed matches over seven query stems.
+    assert rows[0]["relevance_score"] == pytest.approx(3 / 7)
+
+
+def test_retrieve_tag_match_outranks_equal_body_overlap() -> None:
+    body = "Rounding money amounts drifts totals."
+    plain = _base_lesson(
+        title="Money note",
+        lesson_body=body,
+        applies_when=[],
+        source_episode_ids=["lep:tw-a"],
+    )
+    tagged = _base_lesson(
+        title="Money note",
+        lesson_body=body,
+        applies_when=[],
+        source_episode_ids=["lep:tw-b"],
+        tags=["rounding"],
+    )
+    rows = retrieve_lessons([plain, tagged], query_text="rounding", limit=2)
+    assert [row["lesson_id"] for row in rows] == [tagged["lesson_id"], plain["lesson_id"]]
+
+
+def test_judge_keywords_become_normalized_tags() -> None:
+    keywords = [" Rounding ", "HALF-EVEN", "", "total", "x" * 50] + [f"k{i}" for i in range(12)]
+    reply = json.dumps(
+        {
+            "title": "Round half-even",
+            "lesson": "Use half-even rounding for splits.",
+            "applies_when": ["split"],
+            "avoid_when": [],
+            "keywords": keywords,
+        }
+    )
+    lessons = reflect_episodes([_episode("task-kw")], judge=_FakeJudge(reply))
+    assert lessons[0]["reflector"]["kind"] == "judge"
+    assert len(lessons[0]["tags"]) == 12
+    assert "rounding" in lessons[0]["tags"] and "half-even" in lessons[0]["tags"]
+    assert all(len(tag) <= 40 for tag in lessons[0]["tags"])
+    assert "x" * 40 in lessons[0]["tags"]
+
+
+@pytest.mark.parametrize("keywords", ["rounding", [1, 2], ["ok", None]])
+def test_judge_keywords_wrong_type_falls_back(keywords: Any) -> None:
+    reply = json.dumps({"title": "t", "lesson": "b", "keywords": keywords})
+    lessons = reflect_episodes([_episode("task-bad-kw")], judge=_FakeJudge(reply))
+    assert len(lessons) == 1
+    assert lessons[0]["reflector"]["kind"] == "deterministic"
+
+
+def test_judge_keywords_absent_is_allowed() -> None:
+    reply = json.dumps({"title": "t", "lesson": "b"})
+    lessons = reflect_episodes([_episode("task-nokw")], judge=_FakeJudge(reply))
+    assert lessons[0]["reflector"]["kind"] == "judge"
+    assert lessons[0]["tags"] == []
+
+
+def test_deterministic_fallback_tags_include_task_id() -> None:
+    lessons = reflect_episodes([_episode("task-tag")])
+    assert lessons[0]["reflector"]["kind"] == "deterministic"
+    assert "task:task-tag" in lessons[0]["tags"]
+    assert "source:unit" in lessons[0]["tags"]

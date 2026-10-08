@@ -1,4 +1,4 @@
-"""Reflection stage of the learning loop: canonical lesson schema, lesson store, deterministic retrieval helpers and an injectable reflector. Lessons are advisory evidence; they never select routes, models or workers."""
+"""Reflection stage of the learning loop: canonical lesson schema, lesson store, deterministic retrieval helpers (stemmed keyword overlap with tag-weighted matches) and an injectable reflector. Lessons are advisory evidence; they never select routes, models or workers."""
 
 from __future__ import annotations
 
@@ -39,6 +39,8 @@ _TITLE_MAX = 120
 _BODY_MAX = 2000
 _LIST_MAX = 20
 _ITEM_MAX = 300
+_TAG_MAX = 40
+_TAG_LIMIT = 12
 _EVIDENCE_PROMPT_MAX = 600
 _DEFAULT_CONFIDENCE = 0.5
 _DETERMINISTIC_CONFIDENCE = 0.3
@@ -68,6 +70,19 @@ def _unique_ordered(values: Iterable[Any]) -> list[str]:
 def _tokens(text: str) -> set[str]:
     normalized = text.lower().replace("_", " ")
     return {token for token in _TOKEN_RE.findall(normalized) if len(token) >= 3}
+
+
+def _stem(token: str) -> str:
+    word = token.lower()
+    if len(word) >= 5:
+        for suffix in ("ing", "ed", "es", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+                return word[: -len(suffix)]
+    return word
+
+
+def _stems(text: str) -> set[str]:
+    return {_stem(token) for token in _tokens(text)}
 
 
 def _clamp_confidence(value: Any) -> float:
@@ -294,8 +309,8 @@ def retrieve_lessons(
     limit: int = 3,
     require_physical: bool = True,
 ) -> list[dict[str, Any]]:
-    """Deterministic keyword-overlap retrieval over canonical lessons."""
-    query = _tokens(_text(query_text))
+    """Deterministic stemmed keyword retrieval; a tag match weighs twice a body match."""
+    query = _stems(_text(query_text))
     if limit <= 0 or not query:
         return []
     matches: list[tuple[int, Mapping[str, Any]]] = []
@@ -304,24 +319,27 @@ def retrieve_lessons(
             continue
         if require_physical and not lesson.get("retrieval_eligible"):
             continue
-        searchable = " ".join(
-            [
-                _text(lesson.get("title")),
-                _text(lesson.get("lesson_body")),
-                " ".join(_text(item) for item in lesson.get("applies_when") or []),
-                " ".join(_text(item) for item in lesson.get("tags") or []),
-            ]
+        body_stems = _stems(
+            " ".join(
+                [
+                    _text(lesson.get("title")),
+                    _text(lesson.get("lesson_body")),
+                    " ".join(_text(item) for item in lesson.get("applies_when") or []),
+                    " ".join(_text(item) for item in lesson.get("avoid_when") or []),
+                ]
+            )
         )
-        overlap = len(query & _tokens(searchable))
-        if overlap:
-            matches.append((overlap, lesson))
+        tag_stems = _stems(" ".join(_text(item) for item in lesson.get("tags") or []))
+        score = len(query & body_stems) + 2 * len(query & tag_stems)
+        if score:
+            matches.append((score, lesson))
     # Stable sorts applied from least to most significant key.
     matches.sort(key=lambda m: _text(m[1].get("lesson_id")))
     matches.sort(key=lambda m: _text(m[1].get("created_at")), reverse=True)
     matches.sort(key=lambda m: _as_float(m[1].get("confidence")), reverse=True)
     matches.sort(key=lambda m: m[0], reverse=True)
     rows: list[dict[str, Any]] = []
-    for overlap, lesson in matches[:limit]:
+    for score, lesson in matches[:limit]:
         polarity = _text(lesson.get("outcome_polarity"))
         rows.append(
             {
@@ -331,7 +349,7 @@ def retrieve_lessons(
                 "classification": polarity,
                 "pattern_type": polarity,
                 "source": "nexus_learning.lessons",
-                "relevance_score": overlap / max(1, len(query)),
+                "relevance_score": min(1.0, score / max(1, len(query))),
                 "applies_when": list(lesson.get("applies_when") or []),
                 "avoid_when": list(lesson.get("avoid_when") or []),
                 "evidence_refs": list(lesson.get("evidence_refs") or []),
@@ -367,7 +385,9 @@ def build_reflection_prompt(episodes: Sequence[Mapping[str, Any]], polarity: str
         )
     lines.append(
         "Write ONE reusable lesson as JSON with keys title, lesson, applies_when (list), "
-        "avoid_when (list), confidence (0-1). For failures, state what to avoid and why. "
+        "avoid_when (list), keywords (list), confidence (0-1). keywords: 5-10 short lowercase "
+        "terms naming the pitfall, the symptom and the fix (e.g. rounding, half-even, decimal, total, split). "
+        "For failures, state what to avoid and why. "
         "Output JSON only."
     )
     return "\n".join(lines)
@@ -447,6 +467,11 @@ def _optional_str_list(value: Any) -> list[str] | None:
     return value
 
 
+def _normalize_tags(values: Iterable[Any]) -> list[str]:
+    tags = [_text(value).lower()[:_TAG_MAX].strip() for value in values]
+    return _unique_ordered(tags)[:_TAG_LIMIT]
+
+
 def _judge_lesson(
     judge: Callable[[str], str],
     prompt: str,
@@ -470,7 +495,8 @@ def _judge_lesson(
         return None
     applies = _optional_str_list(payload.get("applies_when"))
     avoid = _optional_str_list(payload.get("avoid_when"))
-    if applies is None or avoid is None:
+    keywords = _optional_str_list(payload.get("keywords"))
+    if applies is None or avoid is None or keywords is None:
         return None
     confidence = payload.get("confidence")
     if confidence is None:
@@ -484,6 +510,7 @@ def _judge_lesson(
             applies_when=applies,
             avoid_when=avoid,
             confidence=float(confidence),
+            tags=_normalize_tags(keywords),
             reflector={
                 "kind": REFLECTOR_KIND_JUDGE,
                 "model": model_name,
@@ -524,6 +551,10 @@ def _deterministic_lesson(
         applies_when=[f"task:{task_id}" for task_id in task_ids],
         avoid_when=[_FAILURE_AVOID] if polarity == OUTCOME_POLARITY_FAILURE else [],
         confidence=_DETERMINISTIC_CONFIDENCE,
+        tags=_normalize_tags(
+            [f"task:{task_id}" for task_id in task_ids]
+            + [f"source:{source}" for source in _unique_ordered(_episode_source(ep) for ep in group)]
+        ),
         reflector={
             "kind": REFLECTOR_KIND_DETERMINISTIC,
             "model": "",
