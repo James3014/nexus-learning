@@ -33,3 +33,5 @@ uv sync
 uv run pytest -q
 uv run ruff check nexus_learning tests
 ```
+
+Verified by the Nexus Core two-job gate (container isolation, signed receipts) since 2026-10-09.
