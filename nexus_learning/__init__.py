@@ -120,6 +120,18 @@ from nexus_learning.experiment_run_identity import (
 from nexus_learning.experiment_run_identity import (
     RUNNING as RUN_RUNNING,
 )
+from nexus_learning.lessons import (
+    EVIDENCE_ORIGIN_PHYSICAL,
+    EVIDENCE_ORIGIN_SIMULATED,
+    LEARNING_LESSON_SCHEMA,
+    LessonStore,
+    build_lesson,
+    build_reflection_prompt,
+    load_lessons,
+    reflect_episodes,
+    retrieve_lessons,
+    validate_lesson,
+)
 from nexus_learning.necessary_condition_stop import (
     BOUND_EXACT,
     BOUND_LOWER,
@@ -279,6 +291,16 @@ __all__ = [
     "validate_campaign_closeout",
     "evaluate_reopen_trigger",
     "OutcomeMemoryManager",
+    "LEARNING_LESSON_SCHEMA",
+    "EVIDENCE_ORIGIN_PHYSICAL",
+    "EVIDENCE_ORIGIN_SIMULATED",
+    "build_lesson",
+    "validate_lesson",
+    "LessonStore",
+    "load_lessons",
+    "retrieve_lessons",
+    "reflect_episodes",
+    "build_reflection_prompt",
     "log_retrieval_audit",
     "AuditEntry",
     "LearningStateRoot",

@@ -46,6 +46,10 @@ class LearningStateRoot:
         return self.memory_dir / "learning_episodes.jsonl"
 
     @property
+    def lessons_path(self) -> Path:
+        return self.memory_dir / "learning_lessons.jsonl"
+
+    @property
     def retrieval_log_path(self) -> Path:
         return self.audit_dir / "retrieval_log.jsonl"
 
