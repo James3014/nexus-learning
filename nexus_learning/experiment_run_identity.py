@@ -3,6 +3,8 @@
 This module records observations only.  It does not start, stop, resume, retry,
 schedule, or reconcile an external effect; that remains the responsibility of
 the producer/effect owner.
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from .experiment_integrity import (
     REMOTE_PROVIDER_OBSERVED,
     validate_evidence_origin_provenance,
 )
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 EXPERIMENT_RUN_IDENTITY_SCHEMA = "nexus.learning_experiment_run_identity.v1"
 EXPERIMENT_RUN_IDENTITY_CLAIM_CEILING = (

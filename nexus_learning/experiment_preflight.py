@@ -2,6 +2,8 @@
 
 The contracts here record and validate methodology evidence.  They do not run
 benchmarks, call providers, allocate resources, or authorize holdout execution.
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from .necessary_condition_stop import (
     NEGATIVE_STOP,
     validate_necessary_condition_stop_evidence,
 )
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 COHORT_PREFLIGHT_SCHEMA = "nexus.learning_experiment_cohort_preflight.v1"
 STAGED_GATE_SCHEMA = "nexus.learning_experiment_staged_gate.v1"

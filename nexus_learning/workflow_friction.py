@@ -3,6 +3,8 @@
 This module turns repeated, exact-identity workflow friction into an advisory
 Learning recommendation. It never adopts a recommendation or mutates Runtime,
 Planner, Workforce, merge, release, or deployment state.
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
 """
 from __future__ import annotations
 
@@ -10,6 +12,8 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 WORKFLOW_FRICTION_SCHEMA = "nexus.learning.workflow_friction.v1"
 WORKFLOW_RECOMMENDATION_SCHEMA = "nexus.learning.workflow_recommendation.v1"

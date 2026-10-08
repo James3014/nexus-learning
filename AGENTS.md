@@ -1,15 +1,15 @@
 # Nexus Learning Agent Guidelines
 
 nexus-learning owns:
-- Learning episode projection and normalization
-- Learning closure effectiveness measurement
-- Coverage contract and probes
-- Evidence-bounded policy recommendation lifecycle
-- Independent recommendation validation schemas
-- Governed adoption and rollback contracts
-- Outcome memory storage and retrieval audit
+- Learning-loop Storage: episode projection, outcome memory, retrieval audit, explicit state roots
+- Learning-loop Reflection: canonical lesson schema and lesson store (Phase 1)
+- Learning-loop Measurement: closure effectiveness, paired memory uplift, coverage contract and probes
+- Learning-loop Adoption: evidence-bounded recommendation, independent validation, governed adoption and rollback contracts
+- Frozen research-governance contracts (see docs/architecture/BOUNDARY.md): bug fixes only
 
 nexus-learning does NOT own:
+- lesson retrieval at execution time (nexus-runtime LearningReadPort)
+- vector indexes or provider calls
 - route selection
 - CapabilityPlanner mutation
 - worker/model selection

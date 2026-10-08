@@ -7,6 +7,8 @@ reopen trigger is satisfied, classifies external donor evidence into reuse/
 minimal-transfer validation vs full experiment, drops optional branches with
 zero decision delta, and ensures candidate-generation misses cannot be blamed
 on downstream models.
+
+Frozen research-governance contract (BOUNDARY v2): bug fixes only; no consumer outside nexus-learning.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import hashlib
 import json
 import math
 from typing import Any, Mapping, Sequence
+
+LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 RESEARCH_FRONTIER_SCHEMA = "nexus.learning_research_frontier_governance.v1"
 RESEARCH_FRONTIER_CLAIM_CEILING = (
