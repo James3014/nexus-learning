@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 from nexus_learning.closure_effectiveness import _validate_unterminated_tail
+from nexus_learning.contracts import explicit_verifier_failure
 from nexus_learning.episode_projection import project_learning_entries
 from nexus_learning.state_root import LearningStateRoot
 
@@ -33,7 +34,6 @@ _EPISODE_SCHEMA = "nexus.learning_episode.v1"
 _EVIDENCE_ORIGINS = frozenset({EVIDENCE_ORIGIN_PHYSICAL, EVIDENCE_ORIGIN_SIMULATED})
 _POLARITIES = frozenset({OUTCOME_POLARITY_SUCCESS, OUTCOME_POLARITY_FAILURE})
 _PARKED_OUTCOME = "PARKED"
-_VERIFIER_FAIL_VALUES = frozenset({"fail", "failed"})
 _EVIDENCE_REF_KEYS = ("receipt", "evidence_ref", "receipt_id")
 _TITLE_MAX = 120
 _BODY_MAX = 2000
@@ -391,13 +391,7 @@ def _verifier_failed(episode: Mapping[str, Any]) -> bool:
     repeatability = qualification.get("repeatability") if isinstance(qualification, Mapping) else None
     if isinstance(repeatability, Mapping) and _text(repeatability.get("verifier_status")).lower() == "fail":
         return True
-    evidence = episode.get("terminal_evidence")
-    if not isinstance(evidence, Mapping):
-        return False
-    return any(
-        _text(evidence.get(key)).lower() in _VERIFIER_FAIL_VALUES
-        for key in ("verifier_status", "verifier")
-    )
+    return explicit_verifier_failure(episode.get("terminal_evidence"))
 
 
 def _reflection_polarity(episode: Mapping[str, Any]) -> str | None:

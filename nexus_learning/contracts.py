@@ -251,6 +251,28 @@ def _is_canonical_episode_id(value: Any) -> bool:
     )
 
 
+_VERIFIER_FAIL_VALUES = frozenset({"fail", "failed"})
+
+
+def explicit_verifier_failure(evidence: Any) -> bool:
+    """True when terminal evidence names a verifier failure explicitly."""
+    if not isinstance(evidence, Mapping):
+        return False
+    return any(
+        str(evidence.get(key) or "").strip().lower() in _VERIFIER_FAIL_VALUES
+        for key in ("verifier_status", "verifier")
+    )
+
+
+def parked_verifier_failure_measured(terminal_outcome: Any, evidence: Any) -> bool:
+    """A PARKED attempt is a measured outcome only with an explicit verifier failure.
+
+    Callers still require the receipt/verifier identity (has_outcome_evidence).
+    Lifecycle state, replay and uplift semantics are unaffected by this helper.
+    """
+    return str(terminal_outcome or "").upper() == "PARKED" and explicit_verifier_failure(evidence)
+
+
 def build_nexus_learning_episode(
     *,
     task_id: str,
@@ -302,14 +324,18 @@ def build_nexus_learning_episode(
         and qual.get("prevention_rule")
         and qual.get("authority_qualification")
     )
-    outcome_measured = has_outcome_evidence and str(terminal_outcome).upper() in {
-        "SUCCEEDED",
-        "SUCCESS",
-        "FAILED",
-        "CANCELLED",
-        "BLOCKED",
-        "REJECTED",
-    }
+    outcome_measured = has_outcome_evidence and (
+        str(terminal_outcome).upper()
+        in {
+            "SUCCEEDED",
+            "SUCCESS",
+            "FAILED",
+            "CANCELLED",
+            "BLOCKED",
+            "REJECTED",
+        }
+        or parked_verifier_failure_measured(terminal_outcome, evidence)
+    )
     stages = {
         "recorded": bool(learning_write_succeeded),
         "retrieved": bool(retrieved),
@@ -381,6 +407,9 @@ def validate_nexus_learning_episode(episode: dict[str, Any]) -> None:
         raise ValueError("NEXUS_LEARNING_EPISODE_UPLIFT_WITHOUT_OUTCOME")
     if episode.get("qualification_status") == "QUALIFIED" and not stages.get("outcome_measured"):
         raise ValueError("NEXUS_LEARNING_EPISODE_QUALIFICATION_WITHOUT_EVIDENCE")
+    if stages.get("outcome_measured") and str(episode.get("terminal_outcome") or "").upper() == "PARKED":
+        if not parked_verifier_failure_measured(episode.get("terminal_outcome"), episode.get("terminal_evidence")):
+            raise ValueError("NEXUS_LEARNING_EPISODE_PARKED_MEASURED_WITHOUT_VERIFIER_FAILURE")
 
 
 def paired_memory_uplift_observed(evidence: Mapping[str, Any]) -> bool:
