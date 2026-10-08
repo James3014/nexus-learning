@@ -53,6 +53,18 @@ class LearningStateRoot:
     def retrieval_log_path(self) -> Path:
         return self.audit_dir / "retrieval_log.jsonl"
 
+    @property
+    def policy_dir(self) -> Path:
+        return self.nexus_dir / "policy"
+
+    @property
+    def adoption_path(self) -> Path:
+        return self.policy_dir / "governed_learning_policy_adoption.json"
+
+    @property
+    def rollback_path(self) -> Path:
+        return self.policy_dir / "governed_learning_policy_rollback.json"
+
     @classmethod
     def from_project_root(cls, project_root: str | Path) -> LearningStateRoot:
         if not project_root:

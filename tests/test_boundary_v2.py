@@ -34,6 +34,7 @@ CORE = {
     "state_root",
     "experiment_integrity",
     "lessons",
+    "adoption",
 }
 
 _DOC_BULLET = re.compile(r"^- `nexus_learning\.([a-z_]+)`$")

@@ -205,6 +205,14 @@ class AttemptRow:
         values["missingness_reasons"] = missingness
         values["ineligibility_reasons"] = ineligibility
         values["intervention_events"] = normalized_events
+        # Optional producer provenance; carried through replay so downstream
+        # governance (adoption) can see it. Absent keys stay absent.
+        if "evidence_origin" in raw:
+            if not isinstance(raw["evidence_origin"], str):
+                raise ReplayContractError("evidence_origin must be a string")
+            values["evidence_origin"] = raw["evidence_origin"].strip()
+        if "evidence_refs" in raw:
+            values["evidence_refs"] = _string_sequence("evidence_refs", raw["evidence_refs"])
         return cls(tuple(sorted(values.items())))
 
     def to_dict(self) -> dict[str, Any]:
@@ -215,8 +223,9 @@ class AttemptRow:
             "missingness_reasons",
             "ineligibility_reasons",
             "intervention_events",
+            "evidence_refs",
         ):
-            if result[field] is not None:
+            if result.get(field) is not None:
                 result[field] = list(result[field])
         return result
 

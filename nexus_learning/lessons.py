@@ -1,4 +1,4 @@
-"""Reflection stage of the learning loop: canonical lesson schema, lesson store, deterministic retrieval helpers and an injectable reflector. Lessons are advisory evidence; they never select routes, models or workers."""
+"""Reflection stage of the learning loop: canonical lesson schema, lesson store, deterministic retrieval helpers (stemmed keyword overlap with tag-weighted matches) and an injectable reflector. Lessons are advisory evidence; they never select routes, models or workers."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 from nexus_learning.closure_effectiveness import _validate_unterminated_tail
+from nexus_learning.contracts import explicit_verifier_failure
 from nexus_learning.episode_projection import project_learning_entries
 from nexus_learning.state_root import LearningStateRoot
 
@@ -32,12 +33,14 @@ REFLECTOR_KIND_DETERMINISTIC = "deterministic"
 _EPISODE_SCHEMA = "nexus.learning_episode.v1"
 _EVIDENCE_ORIGINS = frozenset({EVIDENCE_ORIGIN_PHYSICAL, EVIDENCE_ORIGIN_SIMULATED})
 _POLARITIES = frozenset({OUTCOME_POLARITY_SUCCESS, OUTCOME_POLARITY_FAILURE})
-_REFLECTABLE_OUTCOMES = frozenset({"SUCCEEDED", "FAILED"})
+_PARKED_OUTCOME = "PARKED"
 _EVIDENCE_REF_KEYS = ("receipt", "evidence_ref", "receipt_id")
 _TITLE_MAX = 120
 _BODY_MAX = 2000
 _LIST_MAX = 20
 _ITEM_MAX = 300
+_TAG_MAX = 40
+_TAG_LIMIT = 12
 _EVIDENCE_PROMPT_MAX = 600
 _DEFAULT_CONFIDENCE = 0.5
 _DETERMINISTIC_CONFIDENCE = 0.3
@@ -67,6 +70,84 @@ def _unique_ordered(values: Iterable[Any]) -> list[str]:
 def _tokens(text: str) -> set[str]:
     normalized = text.lower().replace("_", " ")
     return {token for token in _TOKEN_RE.findall(normalized) if len(token) >= 3}
+
+
+def _stem(token: str) -> str:
+    word = token.lower()
+    if len(word) >= 5:
+        for suffix in ("ing", "ed", "es", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+                return word[: -len(suffix)]
+    return word
+
+
+_STOPWORDS = frozenset({
+    "the",
+    "and",
+    "for",
+    "that",
+    "this",
+    "with",
+    "from",
+    "are",
+    "was",
+    "were",
+    "when",
+    "which",
+    "while",
+    "should",
+    "would",
+    "could",
+    "will",
+    "not",
+    "but",
+    "its",
+    "into",
+    "than",
+    "then",
+    "they",
+    "them",
+    "there",
+    "their",
+    "have",
+    "has",
+    "had",
+    "been",
+    "being",
+    "also",
+    "only",
+    "all",
+    "any",
+    "each",
+    "such",
+    "use",
+    "used",
+    "using",
+    "returns",
+    "return",
+    "instead",
+    "always",
+    "never",
+    "must",
+    "does",
+    "did",
+    "where",
+    "what",
+    "how",
+    "why",
+    "can",
+    "may",
+    "one",
+    "two",
+    "value",
+    "values",
+    "function",
+})
+
+
+def _stems(text: str) -> set[str]:
+    """Stemmed, stopword-free tokens for retrieval matching."""
+    return {_stem(token) for token in _tokens(text) if token not in _STOPWORDS}
 
 
 def _clamp_confidence(value: Any) -> float:
@@ -171,7 +252,10 @@ def validate_lesson(lesson: Mapping[str, Any]) -> None:
         raise ValueError("LESSON_SCHEMA_MISMATCH")
     if not _text(lesson.get("title")) or not _text(lesson.get("lesson_body")):
         raise ValueError("LESSON_CONTENT_REQUIRED")
-    if len(_text(lesson.get("lesson_body"))) > _BODY_MAX or len(_text(lesson.get("title"))) > _TITLE_MAX:
+    if (
+        len(_text(lesson.get("lesson_body"))) > _BODY_MAX
+        or len(_text(lesson.get("title"))) > _TITLE_MAX
+    ):
         raise ValueError("LESSON_CONTENT_TOO_LONG")
     for key in ("applies_when", "avoid_when"):
         items = lesson.get(key) or []
@@ -293,8 +377,8 @@ def retrieve_lessons(
     limit: int = 3,
     require_physical: bool = True,
 ) -> list[dict[str, Any]]:
-    """Deterministic keyword-overlap retrieval over canonical lessons."""
-    query = _tokens(_text(query_text))
+    """Deterministic stemmed keyword retrieval; a tag match weighs twice a body match."""
+    query = _stems(_text(query_text))
     if limit <= 0 or not query:
         return []
     matches: list[tuple[int, Mapping[str, Any]]] = []
@@ -303,42 +387,41 @@ def retrieve_lessons(
             continue
         if require_physical and not lesson.get("retrieval_eligible"):
             continue
-        searchable = " ".join(
-            [
+        body_stems = _stems(
+            " ".join([
                 _text(lesson.get("title")),
                 _text(lesson.get("lesson_body")),
                 " ".join(_text(item) for item in lesson.get("applies_when") or []),
-                " ".join(_text(item) for item in lesson.get("tags") or []),
-            ]
+                " ".join(_text(item) for item in lesson.get("avoid_when") or []),
+            ])
         )
-        overlap = len(query & _tokens(searchable))
-        if overlap:
-            matches.append((overlap, lesson))
+        tag_stems = _stems(" ".join(_text(item) for item in lesson.get("tags") or []))
+        score = len(query & body_stems) + 2 * len(query & tag_stems)
+        if score:
+            matches.append((score, lesson))
     # Stable sorts applied from least to most significant key.
     matches.sort(key=lambda m: _text(m[1].get("lesson_id")))
     matches.sort(key=lambda m: _text(m[1].get("created_at")), reverse=True)
     matches.sort(key=lambda m: _as_float(m[1].get("confidence")), reverse=True)
     matches.sort(key=lambda m: m[0], reverse=True)
     rows: list[dict[str, Any]] = []
-    for overlap, lesson in matches[:limit]:
+    for score, lesson in matches[:limit]:
         polarity = _text(lesson.get("outcome_polarity"))
-        rows.append(
-            {
-                "lesson_id": _text(lesson.get("lesson_id")),
-                "summary": _text(lesson.get("lesson_body")),
-                "title": _text(lesson.get("title")),
-                "classification": polarity,
-                "pattern_type": polarity,
-                "source": "nexus_learning.lessons",
-                "relevance_score": overlap / max(1, len(query)),
-                "applies_when": list(lesson.get("applies_when") or []),
-                "avoid_when": list(lesson.get("avoid_when") or []),
-                "evidence_refs": list(lesson.get("evidence_refs") or []),
-                "source_episode_ids": list(lesson.get("source_episode_ids") or []),
-                "confidence": _as_float(lesson.get("confidence")),
-                "provenance": "canonical_lesson",
-            }
-        )
+        rows.append({
+            "lesson_id": _text(lesson.get("lesson_id")),
+            "summary": _text(lesson.get("lesson_body")),
+            "title": _text(lesson.get("title")),
+            "classification": polarity,
+            "pattern_type": polarity,
+            "source": "nexus_learning.lessons",
+            "relevance_score": min(1.0, score / max(1, len(query))),
+            "applies_when": list(lesson.get("applies_when") or []),
+            "avoid_when": list(lesson.get("avoid_when") or []),
+            "evidence_refs": list(lesson.get("evidence_refs") or []),
+            "source_episode_ids": list(lesson.get("source_episode_ids") or []),
+            "confidence": _as_float(lesson.get("confidence")),
+            "provenance": "canonical_lesson",
+        })
     return rows
 
 
@@ -366,7 +449,9 @@ def build_reflection_prompt(episodes: Sequence[Mapping[str, Any]], polarity: str
         )
     lines.append(
         "Write ONE reusable lesson as JSON with keys title, lesson, applies_when (list), "
-        "avoid_when (list), confidence (0-1). For failures, state what to avoid and why. "
+        "avoid_when (list), keywords (list), confidence (0-1). keywords: 5-10 short lowercase "
+        "terms naming the pitfall, the symptom and the fix (e.g. rounding, half-even, decimal, total, split). "
+        "For failures, state what to avoid and why. "
         "Output JSON only."
     )
     return "\n".join(lines)
@@ -378,6 +463,38 @@ def _is_qualified(episode: Mapping[str, Any]) -> bool:
     qualified = status == "QUALIFIED" or episode.get("qualification_status") == "QUALIFIED"
     evidence = episode.get("terminal_evidence")
     return bool(qualified) and isinstance(evidence, Mapping) and bool(evidence)
+
+
+def _verifier_failed(episode: Mapping[str, Any]) -> bool:
+    """True when the episode carries explicit verifier-fail evidence.
+
+    Used only to decide whether a PARKED episode is reflected as a failure
+    lesson. It does not change the episode's lifecycle state.
+    """
+    qualification = episode.get("qualification")
+    repeatability = (
+        qualification.get("repeatability") if isinstance(qualification, Mapping) else None
+    )
+    if (
+        isinstance(repeatability, Mapping)
+        and _text(repeatability.get("verifier_status")).lower() == "fail"
+    ):
+        return True
+    return explicit_verifier_failure(episode.get("terminal_evidence"))
+
+
+def _reflection_polarity(episode: Mapping[str, Any]) -> str | None:
+    """Map an episode to a lesson polarity, or None when it is not reflectable.
+
+    PARKED is a lifecycle state (failure without an explicit terminal decision);
+    it yields a failure lesson only when verifier-fail evidence is present.
+    """
+    outcome = _text(episode.get("terminal_outcome")).upper()
+    if outcome == "SUCCEEDED":
+        return OUTCOME_POLARITY_SUCCESS
+    if outcome == "FAILED" or (outcome == _PARKED_OUTCOME and _verifier_failed(episode)):
+        return OUTCOME_POLARITY_FAILURE
+    return None
 
 
 def _evidence_refs(episodes: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -419,6 +536,11 @@ def _optional_str_list(value: Any) -> list[str] | None:
     return value
 
 
+def _normalize_tags(values: Iterable[Any]) -> list[str]:
+    tags = [_text(value).lower()[:_TAG_MAX].strip() for value in values]
+    return _unique_ordered(tags)[:_TAG_LIMIT]
+
+
 def _judge_lesson(
     judge: Callable[[str], str],
     prompt: str,
@@ -442,7 +564,8 @@ def _judge_lesson(
         return None
     applies = _optional_str_list(payload.get("applies_when"))
     avoid = _optional_str_list(payload.get("avoid_when"))
-    if applies is None or avoid is None:
+    keywords = _optional_str_list(payload.get("keywords"))
+    if applies is None or avoid is None or keywords is None:
         return None
     confidence = payload.get("confidence")
     if confidence is None:
@@ -456,6 +579,7 @@ def _judge_lesson(
             applies_when=applies,
             avoid_when=avoid,
             confidence=float(confidence),
+            tags=_normalize_tags(keywords),
             reflector={
                 "kind": REFLECTOR_KIND_JUDGE,
                 "model": model_name,
@@ -475,7 +599,11 @@ def _deterministic_lesson(
     shared: Mapping[str, Any],
 ) -> dict[str, Any]:
     task_ids = _unique_ordered(episode.get("task_id") for episode in group)
-    title = f"{polarity}: {','.join(task_ids)}"[:_TITLE_MAX]
+    parked_only = polarity == OUTCOME_POLARITY_FAILURE and all(
+        _text(ep.get("terminal_outcome")).upper() == _PARKED_OUTCOME for ep in group
+    )
+    label = f"{polarity} ({_PARKED_OUTCOME.lower()})" if parked_only else polarity
+    title = f"{label}: {','.join(task_ids)}"[:_TITLE_MAX]
     summaries = [_text(entry.get("summary")) for entry in project_learning_entries(group)]
     body = "; ".join(summary for summary in summaries if summary)
     if not body:
@@ -484,12 +612,21 @@ def _deterministic_lesson(
             f"{_text(ep.get('terminal_outcome')).upper()} via {_episode_source(ep)}"
             for ep in group
         )
+    if parked_only:
+        body = f"{label} with verifier-fail evidence: {body}"
     return build_lesson(
         title=title,
         lesson_body=body,
         applies_when=[f"task:{task_id}" for task_id in task_ids],
         avoid_when=[_FAILURE_AVOID] if polarity == OUTCOME_POLARITY_FAILURE else [],
         confidence=_DETERMINISTIC_CONFIDENCE,
+        tags=_normalize_tags(
+            [f"task:{task_id}" for task_id in task_ids]
+            + [
+                f"source:{source}"
+                for source in _unique_ordered(_episode_source(ep) for ep in group)
+            ]
+        ),
         reflector={
             "kind": REFLECTOR_KIND_DETERMINISTIC,
             "model": "",
@@ -539,38 +676,29 @@ def reflect_episodes(
     """Reflect canonical episodes into validated lessons.
 
     The judge callable is the only injection point; failures fall back to a
-    deterministic lesson. Episodes that did not reach SUCCEEDED or FAILED are
-    ignored, as are episodes without an episode_id (provenance is required).
+    deterministic lesson. SUCCEEDED and FAILED episodes are reflected as before.
+    PARKED episodes are reflected as failure lessons only when they carry
+    verifier-fail evidence; the episode's lifecycle state is untouched and only
+    the advisory lesson is produced. Other episodes, and episodes without an
+    episode_id (provenance is required), are ignored.
     """
     if max_lessons < 1:
         return []
-    kept = [
-        dict(episode)
-        for episode in episodes
-        if isinstance(episode, Mapping)
-        and _text(episode.get("terminal_outcome")).upper() in _REFLECTABLE_OUTCOMES
-        and _text(episode.get("episode_id"))
-    ]
-    if not kept:
+    tagged: list[tuple[str, dict[str, Any]]] = []
+    for episode in episodes:
+        if not isinstance(episode, Mapping) or not _text(episode.get("episode_id")):
+            continue
+        polarity = _reflection_polarity(episode)
+        if polarity is not None:
+            tagged.append((polarity, dict(episode)))
+    if not tagged:
         return []
-    outcomes = {_text(episode.get("terminal_outcome")).upper() for episode in kept}
-    groups: list[tuple[str, list[dict[str, Any]]]]
-    if outcomes == {"SUCCEEDED"}:
-        groups = [(OUTCOME_POLARITY_SUCCESS, kept)]
-    elif outcomes == {"FAILED"}:
-        groups = [(OUTCOME_POLARITY_FAILURE, kept)]
-    else:
-        groups = [
-            (
-                OUTCOME_POLARITY_SUCCESS,
-                [ep for ep in kept if _text(ep.get("terminal_outcome")).upper() == "SUCCEEDED"],
-            ),
-            (
-                OUTCOME_POLARITY_FAILURE,
-                [ep for ep in kept if _text(ep.get("terminal_outcome")).upper() == "FAILED"],
-            ),
-        ]
-        groups = [(polarity, group) for polarity, group in groups if group]
+    kept = [episode for _, episode in tagged]
+    groups: list[tuple[str, list[dict[str, Any]]]] = [
+        (polarity, [episode for tag, episode in tagged if tag == polarity])
+        for polarity in (OUTCOME_POLARITY_SUCCESS, OUTCOME_POLARITY_FAILURE)
+    ]
+    groups = [(polarity, group) for polarity, group in groups if group]
     origin = (
         EVIDENCE_ORIGIN_PHYSICAL
         if all(_is_qualified(episode) for episode in kept)
