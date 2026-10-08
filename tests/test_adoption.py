@@ -9,6 +9,8 @@ from nexus_learning.adoption import (
     ADOPTION_DECISION_DEFER,
     ADOPTION_DECISION_REJECT,
     ADOPTION_PIPELINE_SCHEMA,
+    REASON_INSUFFICIENT_PAIRS,
+    REASON_NET_REGRESSION,
     AdoptionStore,
     build_adoption_from_scorecard,
 )
@@ -100,6 +102,12 @@ def test_positive_uplift_with_quality_gate_adopts_and_persists(tmp_path):
         "VALIDATED_FOR_ADOPTION_CONSIDERATION"
     )
     assert result["rollback"] is None
+    assert result["uplift_summary"] == {
+        "eligible": 3,
+        "regressions": 0,
+        "net_uplift": 3,
+        "min_eligible_pairs": 3,
+    }
 
     store = AdoptionStore(state_root)
     stored = store.read_adoption()
@@ -314,3 +322,65 @@ def test_replay_keeps_evidence_origin_and_refs_only_when_supplied():
     assert with_fields["evidence_refs"] == sorted(row["evidence_refs"])
     assert "evidence_origin" not in without
     assert "evidence_refs" not in without
+
+
+def single_task_rows(on_pass, off_pass, fingerprint="fp-1"):
+    return [
+        attempt(fingerprint, "memory_off", off_pass),
+        attempt(fingerprint, "memory_on", on_pass),
+    ]
+
+
+def test_single_eligible_pair_defers_under_default_floor():
+    scorecard = replay_scorecard(single_task_rows(on_pass=True, off_pass=False))
+
+    result = decide(scorecard)
+
+    assert result["decision"] == ADOPTION_DECISION_DEFER
+    assert result["reason_codes"] == [REASON_INSUFFICIENT_PAIRS]
+    assert result["uplift_summary"]["eligible"] == 1
+    assert result["adoption"] is None
+
+
+def test_single_eligible_pair_adopts_when_floor_lowered_to_one():
+    scorecard = replay_scorecard(single_task_rows(on_pass=True, off_pass=False))
+
+    result = decide(scorecard, min_eligible_pairs=1)
+
+    assert result["decision"] == ADOPTION_DECISION_ADOPT, result["reason_codes"]
+    assert result["uplift_summary"] == {
+        "eligible": 1,
+        "regressions": 0,
+        "net_uplift": 1,
+        "min_eligible_pairs": 1,
+    }
+
+
+def test_single_eligible_pair_with_regression_defers_on_net_uplift():
+    rows = [
+        *single_task_rows(on_pass=True, off_pass=False, fingerprint="fp-1"),
+        *single_task_rows(on_pass=False, off_pass=True, fingerprint="fp-2"),
+    ]
+    scorecard = replay_scorecard(rows)
+
+    result = decide(
+        scorecard, min_eligible_pairs=1, required_quality_floor=0.5, critical_failure_ceiling=1
+    )
+
+    assert result["decision"] == ADOPTION_DECISION_DEFER
+    assert result["reason_codes"] == [REASON_NET_REGRESSION]
+    assert result["uplift_summary"] == {
+        "eligible": 1,
+        "regressions": 1,
+        "net_uplift": 0,
+        "min_eligible_pairs": 1,
+    }
+    assert result["adoption"] is None
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_non_positive_min_eligible_pairs_raises(bad):
+    scorecard = replay_scorecard(scorecard_rows(*UPLIFT))
+
+    with pytest.raises(ValueError):
+        decide(scorecard, min_eligible_pairs=bad)

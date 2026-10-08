@@ -7,6 +7,8 @@ from nexus_learning.adoption import (
     ADOPTION_DECISION_DEFER,
     ADOPTION_DECISION_REJECT,
     ADOPTION_PIPELINE_SCHEMA,
+    REASON_INSUFFICIENT_PAIRS,
+    REASON_NET_REGRESSION,
     AdoptionStore,
     build_adoption_from_scorecard,
 )
@@ -198,6 +200,8 @@ __all__ = [
     "ADOPTION_DECISION_REJECT",
     "ADOPTION_PIPELINE_SCHEMA",
     "AdoptionStore",
+    "REASON_INSUFFICIENT_PAIRS",
+    "REASON_NET_REGRESSION",
     "build_adoption_from_scorecard",
     "NEXUS_LEARNING_EPISODE_SCHEMA",
     "RUNTIME_LEARNING_CLOSURE_SCHEMA",

@@ -52,6 +52,8 @@ REASON_QUALITY_GATE_NOT_PASSED = "ADOPTION_QUALITY_GATE_NOT_PASSED"
 REASON_NO_POSITIVE_UPLIFT = "ADOPTION_NO_POSITIVE_UPLIFT"
 REASON_VALIDATION_NOT_PASSED = "ADOPTION_VALIDATION_NOT_PASSED"
 REASON_TASK_FAMILY_MISSING = "ADOPTION_TASK_FAMILY_MISSING"
+REASON_INSUFFICIENT_PAIRS = "ADOPTION_INSUFFICIENT_PAIRS"
+REASON_NET_REGRESSION = "ADOPTION_NET_REGRESSION"
 
 VALIDATION_PASS_DISPOSITION = "VALIDATED_FOR_ADOPTION_CONSIDERATION"
 
@@ -111,6 +113,7 @@ def _result(
     validation: Mapping[str, Any] | None = None,
     adoption: Mapping[str, Any] | None = None,
     rollback: Mapping[str, Any] | None = None,
+    uplift_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema": ADOPTION_PIPELINE_SCHEMA,
@@ -122,6 +125,7 @@ def _result(
         "validation": dict(validation) if validation is not None else None,
         "adoption": dict(adoption) if adoption is not None else None,
         "rollback": dict(rollback) if rollback is not None else None,
+        "uplift_summary": dict(uplift_summary) if uplift_summary is not None else None,
         "advisory_only": True,
         "authority_effect": False,
     }
@@ -218,6 +222,34 @@ def _episode_for_row(row: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
+def _uplift_summary(
+    paired: Mapping[str, Any], rows: list[dict[str, Any]], min_eligible_pairs: int
+) -> dict[str, Any]:
+    """Net paired uplift: eligible pairs minus memory_off-pass / memory_on-fail regressions."""
+    by_fingerprint: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        arms = by_fingerprint.setdefault(str(row.get("task_fingerprint")), {})
+        arms.setdefault(str(row.get("memory_arm")), []).append(row)
+    regressions = 0
+    for arms in by_fingerprint.values():
+        off_rows = arms.get("memory_off", [])
+        on_rows = arms.get("memory_on", [])
+        if (
+            off_rows
+            and on_rows
+            and any(_is_qualified_pass(row) for row in off_rows)
+            and not any(_is_qualified_pass(row) for row in on_rows)
+        ):
+            regressions += 1
+    eligible = int(paired.get("eligible") or 0)
+    return {
+        "eligible": eligible,
+        "regressions": regressions,
+        "net_uplift": eligible - regressions,
+        "min_eligible_pairs": min_eligible_pairs,
+    }
+
+
 def _decide(
     scorecard: Any,
     *,
@@ -232,17 +264,29 @@ def _decide(
     task_family: str,
     current_policy: dict[str, Any] | None,
     rollback_target: dict[str, Any] | None,
+    min_eligible_pairs: int,
 ) -> dict[str, Any]:
     if _scorecard_problem(scorecard) is not None:
         return _result(ADOPTION_DECISION_REJECT, [REASON_SCORECARD_INVALID])
     paired = scorecard["paired_memory_uplift"]
     rows = [dict(row) for row in scorecard["rows"]]
+    uplift_summary = _uplift_summary(paired, rows, min_eligible_pairs)
 
     # 2. Only physically observed rows may ground a policy.
     if any(row.get("evidence_origin") != EVIDENCE_ORIGIN_PHYSICAL for row in rows):
-        return _result(ADOPTION_DECISION_REJECT, [REASON_SIMULATED_EVIDENCE], paired=paired)
+        return _result(
+            ADOPTION_DECISION_REJECT,
+            [REASON_SIMULATED_EVIDENCE],
+            paired=paired,
+            uplift_summary=uplift_summary,
+        )
     if any(str(row.get("source_revision", "")).strip() != source_revision.strip() for row in rows):
-        return _result(ADOPTION_DECISION_DEFER, [REASON_SOURCE_REVISION_MISMATCH], paired=paired)
+        return _result(
+            ADOPTION_DECISION_DEFER,
+            [REASON_SOURCE_REVISION_MISMATCH],
+            paired=paired,
+            uplift_summary=uplift_summary,
+        )
 
     # 3. Required-quality gate on the memory-on workflow.
     try:
@@ -252,7 +296,12 @@ def _decide(
             critical_failure_ceiling=critical_failure_ceiling,
         )
     except ValueError:
-        return _result(ADOPTION_DECISION_REJECT, [REASON_SCORECARD_INVALID], paired=paired)
+        return _result(
+            ADOPTION_DECISION_REJECT,
+            [REASON_SCORECARD_INVALID],
+            paired=paired,
+            uplift_summary=uplift_summary,
+        )
     on_unit = next(
         (unit for unit in quality["rows"] if unit["workflow_identity"] == _ON_WORKFLOW),
         None,
@@ -262,6 +311,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_QUALITY_GATE_NOT_PASSED],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
         )
 
@@ -272,7 +322,24 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_NO_POSITIVE_UPLIFT],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
+        )
+    if int(paired.get("eligible") or 0) < min_eligible_pairs:
+        return _result(
+            ADOPTION_DECISION_DEFER,
+            [REASON_INSUFFICIENT_PAIRS],
+            paired=paired,
+            quality_gate=quality,
+            uplift_summary=uplift_summary,
+        )
+    if uplift_summary["net_uplift"] <= 0:
+        return _result(
+            ADOPTION_DECISION_DEFER,
+            [REASON_NET_REGRESSION],
+            paired=paired,
+            quality_gate=quality,
+            uplift_summary=uplift_summary,
         )
     fingerprint = task_fingerprint.strip() or sorted(eligible)[0]
     if fingerprint not in eligible:
@@ -280,6 +347,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_NO_POSITIVE_UPLIFT],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
         )
     off_pair = [
@@ -297,6 +365,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_NO_POSITIVE_UPLIFT],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
         )
     off_row, on_row = off_pair[0], on_pair[0]
@@ -312,6 +381,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_NO_POSITIVE_UPLIFT],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
         )
 
@@ -328,6 +398,7 @@ def _decide(
                 ADOPTION_DECISION_DEFER,
                 ["RECOMMENDATION_NON_POSITIVE_EXPERIMENT_CANNOT_BE_RECOMMENDED"],
                 paired=paired,
+                uplift_summary=uplift_summary,
                 quality_gate=quality,
             )
 
@@ -342,6 +413,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_TASK_FAMILY_MISSING],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
         )
     applicable_scope = {
@@ -386,6 +458,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [REASON_VALIDATION_NOT_PASSED, *validation["blockers"]],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
             recommendation=recommendation,
             validation=validation,
@@ -409,6 +482,7 @@ def _decide(
             ADOPTION_DECISION_DEFER,
             [str(exc)],
             paired=paired,
+            uplift_summary=uplift_summary,
             quality_gate=quality,
             recommendation=recommendation,
             validation=validation,
@@ -417,6 +491,7 @@ def _decide(
         ADOPTION_DECISION_ADOPT,
         [],
         paired=paired,
+        uplift_summary=uplift_summary,
         quality_gate=quality,
         recommendation=recommendation,
         validation=validation,
@@ -439,15 +514,22 @@ def build_adoption_from_scorecard(
     task_family: str = "local_heal",
     current_policy: dict[str, Any] | None = None,
     rollback_target: dict[str, Any] | None = None,
+    min_eligible_pairs: int = 3,
 ) -> dict[str, Any]:
     """Decide ADOPT / DEFER / REJECT for a memory on/off replay scorecard.
 
     Rows must carry ``evidence_origin == "physical"`` and ``memory_arm`` (the
     workflow identity is derived from it). Invalid inputs raise nothing for the
-    decision itself; they yield REJECT. When ``state_root`` is given, an ADOPT
-    writes the adoption file and a rollback record (if any) writes the rollback
-    file; never both for one decision.
+    decision itself; they yield REJECT. ADOPT additionally requires at least
+    ``min_eligible_pairs`` paired uplift pairs and a strictly positive net uplift
+    (eligible pairs minus regressions); otherwise the decision is DEFER.
+    When ``state_root`` is given, an ADOPT writes the adoption file and a
+    rollback record (if any) writes the rollback file; never both for one decision.
+
+    Raises ValueError when ``min_eligible_pairs`` is below 1.
     """
+    if min_eligible_pairs < 1:
+        raise ValueError("min_eligible_pairs must be >= 1")
     decision = _decide(
         scorecard,
         source_revision=source_revision,
@@ -461,6 +543,7 @@ def build_adoption_from_scorecard(
         task_family=task_family,
         current_policy=current_policy,
         rollback_target=rollback_target,
+        min_eligible_pairs=min_eligible_pairs,
     )
     if state_root is not None:
         store = AdoptionStore(state_root)
@@ -524,5 +607,7 @@ __all__ = [
     "ADOPTION_DECISION_REJECT",
     "ADOPTION_PIPELINE_SCHEMA",
     "AdoptionStore",
+    "REASON_INSUFFICIENT_PAIRS",
+    "REASON_NET_REGRESSION",
     "build_adoption_from_scorecard",
 ]
