@@ -51,6 +51,7 @@ REASON_SOURCE_REVISION_MISMATCH = "ADOPTION_SOURCE_REVISION_MISMATCH"
 REASON_QUALITY_GATE_NOT_PASSED = "ADOPTION_QUALITY_GATE_NOT_PASSED"
 REASON_NO_POSITIVE_UPLIFT = "ADOPTION_NO_POSITIVE_UPLIFT"
 REASON_VALIDATION_NOT_PASSED = "ADOPTION_VALIDATION_NOT_PASSED"
+REASON_TASK_FAMILY_MISSING = "ADOPTION_TASK_FAMILY_MISSING"
 
 VALIDATION_PASS_DISPOSITION = "VALIDATED_FOR_ADOPTION_CONSIDERATION"
 
@@ -228,6 +229,7 @@ def _decide(
     owner_authority_reference: str,
     experiment_integrity: dict[str, Any] | None,
     task_fingerprint: str,
+    task_family: str,
     current_policy: dict[str, Any] | None,
     rollback_target: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -334,10 +336,19 @@ def _decide(
         {str(ref) for row in (off_row, on_row) for ref in row.get("evidence_refs", ())}
     )
     uplift_rate = round(int(paired["numerator"]) / int(paired["denominator"]), 4)
+    family = task_family.strip()
+    if not family:
+        return _result(
+            ADOPTION_DECISION_DEFER,
+            [REASON_TASK_FAMILY_MISSING],
+            paired=paired,
+            quality_gate=quality,
+        )
     applicable_scope = {
         "memory_arm": "nexus_memory_on",
         "task_fingerprint": fingerprint,
         "source": "local_heal",
+        "task_family": family,
     }
     policy_delta = {"memory_retrieval": "enabled", "lesson_sources": ["canonical_lesson"]}
     rollback = dict(rollback_target or _DEFAULT_ROLLBACK_TARGET)
@@ -425,6 +436,7 @@ def build_adoption_from_scorecard(
     state_root: LearningStateRoot | None = None,
     experiment_integrity: dict[str, Any] | None = None,
     task_fingerprint: str = "",
+    task_family: str = "local_heal",
     current_policy: dict[str, Any] | None = None,
     rollback_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -446,6 +458,7 @@ def build_adoption_from_scorecard(
         owner_authority_reference=owner_authority_reference,
         experiment_integrity=experiment_integrity,
         task_fingerprint=task_fingerprint,
+        task_family=task_family,
         current_policy=current_policy,
         rollback_target=rollback_target,
     )

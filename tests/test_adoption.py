@@ -109,18 +109,51 @@ def test_positive_uplift_with_quality_gate_adopts_and_persists(tmp_path):
     assert not state_root.rollback_path.exists()
 
 
-def test_adoption_is_accepted_by_planner_projection(tmp_path):
+def test_adoption_is_in_scope_for_planner_projection():
     result = decide(replay_scorecard(scorecard_rows(*UPLIFT)))
     adoption = result["adoption"]
+    assert adoption["adopted_scope"]["task_family"] == "local_heal"
 
-    budget = project_adoption_into_planner_budget(adoption, task_desc="memory retrieval task")
+    budget = project_adoption_into_planner_budget(
+        adoption, task_desc="Local_Heal repair of a failing test"
+    )
 
     lineage = budget["learning_policy"]["adoption_lineage"]
     assert lineage["adoption_id"] == adoption["adoption_id"]
-    # adopted_scope carries no task_family, so the projection reports OUT_OF_SCOPE
-    # and keeps episodic injection disabled. Scope is a known gap, see report.
-    assert lineage["status"] == "OUT_OF_SCOPE"
+    assert lineage["status"] == "ACTIVE_CANDIDATE"
+    assert lineage["scope"]["task_family"] == "local_heal"
+    assert budget["learning_policy"]["episodic_memory_injection"] == {
+        "enabled": True,
+        "scope": "local_heal",
+    }
+
+
+def test_adoption_projection_is_out_of_scope_for_other_task_family():
+    adoption = decide(replay_scorecard(scorecard_rows(*UPLIFT)))["adoption"]
+
+    budget = project_adoption_into_planner_budget(adoption, task_desc="unrelated refactor")
+
+    assert budget["learning_policy"]["adoption_lineage"]["status"] == "OUT_OF_SCOPE"
     assert budget["learning_policy"]["episodic_memory_injection"] == {"enabled": False}
+
+
+def test_custom_task_family_flows_into_scope_and_projection():
+    result = decide(replay_scorecard(scorecard_rows(*UPLIFT)), task_family="code_review")
+
+    assert result["adoption"]["adopted_scope"]["task_family"] == "code_review"
+    assert result["recommendation"]["applicable_scope"]["task_family"] == "code_review"
+    budget = project_adoption_into_planner_budget(
+        result["adoption"], task_desc="code_review of module"
+    )
+    assert budget["learning_policy"]["adoption_lineage"]["status"] == "ACTIVE_CANDIDATE"
+
+
+def test_blank_task_family_defers():
+    result = decide(replay_scorecard(scorecard_rows(*UPLIFT)), task_family="   ")
+
+    assert result["decision"] == ADOPTION_DECISION_DEFER
+    assert result["reason_codes"] == ["ADOPTION_TASK_FAMILY_MISSING"]
+    assert result["adoption"] is None
 
 
 def test_zero_uplift_defers_without_writing(tmp_path):
