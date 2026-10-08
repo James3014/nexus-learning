@@ -423,3 +423,206 @@ def test_build_lesson_bounds_text_and_lists() -> None:
     forged["lesson_body"] = "b" * 2001
     with pytest.raises(ValueError, match="LESSON_CONTENT_TOO_LONG"):
         validate_lesson(forged)
+
+
+_FULL_QUALIFICATION = {
+    "status": "QUALIFIED",
+    "repeatability": {"verifier_status": "fail"},
+    "prevention_rule": "stop retrying the same patch",
+    "authority_qualification": "local-heal",
+}
+
+
+def _parked_episode(
+    task_id: str,
+    *,
+    terminal_evidence: dict[str, Any],
+    qualification: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return build_nexus_learning_episode(
+        task_id=task_id,
+        attempt_id=f"att-{task_id}",
+        source="unit",
+        terminal_outcome="PARKED",
+        terminal_evidence=terminal_evidence,
+        qualification=qualification,
+    )
+
+
+def test_reflect_parked_with_qualified_verifier_fail_is_physical_failure() -> None:
+    episode = _parked_episode(
+        "park-q",
+        terminal_evidence={"receipt": "r1", "verifier_status": "fail"},
+        qualification=_FULL_QUALIFICATION,
+    )
+    assert episode["qualification_status"] == "QUALIFIED"
+    assert episode["stages"]["outcome_measured"] is True
+    assert episode["auto_replay_allowed"] is False
+    lessons = reflect_episodes([episode])
+    assert len(lessons) == 1
+    lesson = lessons[0]
+    assert lesson["outcome_polarity"] == "failure"
+    assert lesson["evidence_origin"] == EVIDENCE_ORIGIN_PHYSICAL
+    assert lesson["retrieval_eligible"] is True
+    assert lesson["title"].startswith("failure (parked):")
+    assert lesson["source_episode_ids"] == [episode["episode_id"]]
+    assert "failure (parked)" in lesson["lesson_body"]
+
+
+def test_reflect_parked_with_terminal_verifier_fail_unqualified_is_simulated_failure() -> None:
+    episode = _parked_episode(
+        "park-s",
+        terminal_evidence={"verifier": "fail", "receipt": "r1"},
+        qualification=None,
+    )
+    lessons = reflect_episodes([episode])
+    assert len(lessons) == 1
+    assert lessons[0]["outcome_polarity"] == "failure"
+    assert lessons[0]["evidence_origin"] == EVIDENCE_ORIGIN_SIMULATED
+    assert lessons[0]["retrieval_eligible"] is False
+
+
+def test_reflect_parked_without_verifier_fail_is_ignored() -> None:
+    episode = _parked_episode(
+        "park-n",
+        terminal_evidence={"receipt": "r0", "verifier": "pytest"},
+        qualification={"repeatability": {"verifier_status": "pass"}},
+    )
+    assert reflect_episodes([episode]) == []
+
+
+def test_reflect_mixed_succeeded_and_parked_fail_yield_opposite_polarities() -> None:
+    succeeded = _episode("ok-d")
+    parked = _parked_episode(
+        "park-d",
+        terminal_evidence={"receipt": "r1", "verifier_status": "fail"},
+        qualification=_FULL_QUALIFICATION,
+    )
+    lessons = reflect_episodes([succeeded, parked])
+    assert len(lessons) == 2
+    by_polarity = {lesson["outcome_polarity"]: lesson for lesson in lessons}
+    assert set(by_polarity) == {"success", "failure"}
+    assert by_polarity["success"]["source_task_ids"] == ["ok-d"]
+    assert by_polarity["failure"]["source_task_ids"] == ["park-d"]
+    assert by_polarity["failure"]["evidence_origin"] == EVIDENCE_ORIGIN_PHYSICAL
+
+
+def test_parked_verifier_fail_is_classified_as_failure_not_success() -> None:
+    from nexus_learning.closure_effectiveness import classify_closure_effectiveness
+    from nexus_learning.episode_projection import project_learning_entries
+
+    episode = _parked_episode(
+        "park-c",
+        terminal_evidence={"receipt": "r1", "verifier_status": "fail"},
+        qualification=_FULL_QUALIFICATION,
+    )
+    # Neither classifier emits a success label for a PARKED verifier-fail episode.
+    assert classify_closure_effectiveness(episode) == "no_change"
+    projected = project_learning_entries([episode])
+    assert len(projected) == 1
+    assert projected[0]["pattern_type"] == "unknown"
+    assert projected[0]["qualification_reason"] == "unclassified"
+    assert projected[0]["retrieval_eligible"] is False
+
+
+def test_validator_rejects_parked_qualification_without_verifier_failure() -> None:
+    from nexus_learning.contracts import validate_nexus_learning_episode
+
+    with pytest.raises(ValueError, match="NEXUS_LEARNING_EPISODE_QUALIFICATION_WITHOUT_EVIDENCE"):
+        _parked_episode(
+            "park-x",
+            terminal_evidence={"receipt": "r1", "verifier": "pytest"},
+            qualification=_FULL_QUALIFICATION,
+        )
+
+    forged = _parked_episode(
+        "park-y",
+        terminal_evidence={"receipt": "r1", "verifier": "pytest"},
+        qualification=None,
+    )
+    forged["stages"] = dict(forged["stages"], outcome_measured=True)
+    with pytest.raises(
+        ValueError, match="NEXUS_LEARNING_EPISODE_PARKED_MEASURED_WITHOUT_VERIFIER_FAILURE"
+    ):
+        validate_nexus_learning_episode(forged)
+
+
+def test_retrieve_stems_inflections_to_match_lessons() -> None:
+    receipt = _base_lesson(
+        title="Round split shares",
+        lesson_body="Round each share to cents with half-even rounding so parts sum evenly.",
+        applies_when=["Calculating totals in receipts"],
+        source_episode_ids=["lep:stem-a"],
+    )
+    unrelated = _base_lesson(
+        title="Deploy checklist",
+        lesson_body="Verify staging rollout before promoting release.",
+        applies_when=["release window"],
+        source_episode_ids=["lep:stem-b"],
+    )
+    rows = retrieve_lessons(
+        [unrelated, receipt],
+        query_text="shares of a split should add up exactly to the total",
+    )
+    assert [row["lesson_id"] for row in rows] == [receipt["lesson_id"]]
+    assert "rounding" in rows[0]["summary"]
+    # shares~shar, split and totals~total: three stemmed matches over seven query stems.
+    assert rows[0]["relevance_score"] == pytest.approx(3 / 5)  # 5 query stems after stopwords
+
+
+def test_retrieve_tag_match_outranks_equal_body_overlap() -> None:
+    body = "Rounding money amounts drifts totals."
+    plain = _base_lesson(
+        title="Money note",
+        lesson_body=body,
+        applies_when=[],
+        source_episode_ids=["lep:tw-a"],
+    )
+    tagged = _base_lesson(
+        title="Money note",
+        lesson_body=body,
+        applies_when=[],
+        source_episode_ids=["lep:tw-b"],
+        tags=["rounding"],
+    )
+    rows = retrieve_lessons([plain, tagged], query_text="rounding", limit=2)
+    assert [row["lesson_id"] for row in rows] == [tagged["lesson_id"], plain["lesson_id"]]
+
+
+def test_judge_keywords_become_normalized_tags() -> None:
+    keywords = [" Rounding ", "HALF-EVEN", "", "total", "x" * 50] + [f"k{i}" for i in range(12)]
+    reply = json.dumps({
+        "title": "Round half-even",
+        "lesson": "Use half-even rounding for splits.",
+        "applies_when": ["split"],
+        "avoid_when": [],
+        "keywords": keywords,
+    })
+    lessons = reflect_episodes([_episode("task-kw")], judge=_FakeJudge(reply))
+    assert lessons[0]["reflector"]["kind"] == "judge"
+    assert len(lessons[0]["tags"]) == 12
+    assert "rounding" in lessons[0]["tags"] and "half-even" in lessons[0]["tags"]
+    assert all(len(tag) <= 40 for tag in lessons[0]["tags"])
+    assert "x" * 40 in lessons[0]["tags"]
+
+
+@pytest.mark.parametrize("keywords", ["rounding", [1, 2], ["ok", None]])
+def test_judge_keywords_wrong_type_falls_back(keywords: Any) -> None:
+    reply = json.dumps({"title": "t", "lesson": "b", "keywords": keywords})
+    lessons = reflect_episodes([_episode("task-bad-kw")], judge=_FakeJudge(reply))
+    assert len(lessons) == 1
+    assert lessons[0]["reflector"]["kind"] == "deterministic"
+
+
+def test_judge_keywords_absent_is_allowed() -> None:
+    reply = json.dumps({"title": "t", "lesson": "b"})
+    lessons = reflect_episodes([_episode("task-nokw")], judge=_FakeJudge(reply))
+    assert lessons[0]["reflector"]["kind"] == "judge"
+    assert lessons[0]["tags"] == []
+
+
+def test_deterministic_fallback_tags_include_task_id() -> None:
+    lessons = reflect_episodes([_episode("task-tag")])
+    assert lessons[0]["reflector"]["kind"] == "deterministic"
+    assert "task:task-tag" in lessons[0]["tags"]
+    assert "source:unit" in lessons[0]["tags"]
