@@ -423,3 +423,124 @@ def test_build_lesson_bounds_text_and_lists() -> None:
     forged["lesson_body"] = "b" * 2001
     with pytest.raises(ValueError, match="LESSON_CONTENT_TOO_LONG"):
         validate_lesson(forged)
+
+
+
+_FULL_QUALIFICATION = {
+    "status": "QUALIFIED",
+    "repeatability": {"verifier_status": "fail"},
+    "prevention_rule": "stop retrying the same patch",
+    "authority_qualification": "local-heal",
+}
+
+
+def _parked_episode(
+    task_id: str,
+    *,
+    terminal_evidence: dict[str, Any],
+    qualification: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return build_nexus_learning_episode(
+        task_id=task_id,
+        attempt_id=f"att-{task_id}",
+        source="unit",
+        terminal_outcome="PARKED",
+        terminal_evidence=terminal_evidence,
+        qualification=qualification,
+    )
+
+
+def test_reflect_parked_with_qualified_verifier_fail_is_physical_failure() -> None:
+    episode = _parked_episode(
+        "park-q",
+        terminal_evidence={"receipt": "r1", "verifier_status": "fail"},
+        qualification=_FULL_QUALIFICATION,
+    )
+    assert episode["qualification_status"] == "QUALIFIED"
+    assert episode["stages"]["outcome_measured"] is True
+    assert episode["auto_replay_allowed"] is False
+    lessons = reflect_episodes([episode])
+    assert len(lessons) == 1
+    lesson = lessons[0]
+    assert lesson["outcome_polarity"] == "failure"
+    assert lesson["evidence_origin"] == EVIDENCE_ORIGIN_PHYSICAL
+    assert lesson["retrieval_eligible"] is True
+    assert lesson["title"].startswith("failure (parked):")
+    assert lesson["source_episode_ids"] == [episode["episode_id"]]
+    assert "failure (parked)" in lesson["lesson_body"]
+
+
+def test_reflect_parked_with_terminal_verifier_fail_unqualified_is_simulated_failure() -> None:
+    episode = _parked_episode(
+        "park-s",
+        terminal_evidence={"verifier": "fail", "receipt": "r1"},
+        qualification=None,
+    )
+    lessons = reflect_episodes([episode])
+    assert len(lessons) == 1
+    assert lessons[0]["outcome_polarity"] == "failure"
+    assert lessons[0]["evidence_origin"] == EVIDENCE_ORIGIN_SIMULATED
+    assert lessons[0]["retrieval_eligible"] is False
+
+
+def test_reflect_parked_without_verifier_fail_is_ignored() -> None:
+    episode = _parked_episode(
+        "park-n",
+        terminal_evidence={"receipt": "r0", "verifier": "pytest"},
+        qualification={"repeatability": {"verifier_status": "pass"}},
+    )
+    assert reflect_episodes([episode]) == []
+
+
+def test_reflect_mixed_succeeded_and_parked_fail_yield_opposite_polarities() -> None:
+    succeeded = _episode("ok-d")
+    parked = _parked_episode(
+        "park-d",
+        terminal_evidence={"receipt": "r1", "verifier_status": "fail"},
+        qualification=_FULL_QUALIFICATION,
+    )
+    lessons = reflect_episodes([succeeded, parked])
+    assert len(lessons) == 2
+    by_polarity = {lesson["outcome_polarity"]: lesson for lesson in lessons}
+    assert set(by_polarity) == {"success", "failure"}
+    assert by_polarity["success"]["source_task_ids"] == ["ok-d"]
+    assert by_polarity["failure"]["source_task_ids"] == ["park-d"]
+    assert by_polarity["failure"]["evidence_origin"] == EVIDENCE_ORIGIN_PHYSICAL
+
+
+def test_parked_verifier_fail_is_classified_as_failure_not_success() -> None:
+    from nexus_learning.closure_effectiveness import classify_closure_effectiveness
+    from nexus_learning.episode_projection import project_learning_entries
+
+    episode = _parked_episode(
+        "park-c",
+        terminal_evidence={"receipt": "r1", "verifier_status": "fail"},
+        qualification=_FULL_QUALIFICATION,
+    )
+    # Neither classifier emits a success label for a PARKED verifier-fail episode.
+    assert classify_closure_effectiveness(episode) == "no_change"
+    projected = project_learning_entries([episode])
+    assert len(projected) == 1
+    assert projected[0]["pattern_type"] == "unknown"
+    assert projected[0]["qualification_reason"] == "unclassified"
+    assert projected[0]["retrieval_eligible"] is False
+
+
+def test_validator_rejects_parked_qualification_without_verifier_failure() -> None:
+    from nexus_learning.contracts import validate_nexus_learning_episode
+
+    with pytest.raises(ValueError, match="NEXUS_LEARNING_EPISODE_QUALIFICATION_WITHOUT_EVIDENCE"):
+        _parked_episode(
+            "park-x",
+            terminal_evidence={"receipt": "r1", "verifier": "pytest"},
+            qualification=_FULL_QUALIFICATION,
+        )
+
+    forged = _parked_episode(
+        "park-y",
+        terminal_evidence={"receipt": "r1", "verifier": "pytest"},
+        qualification=None,
+    )
+    forged["stages"] = dict(forged["stages"], outcome_measured=True)
+    with pytest.raises(ValueError, match="NEXUS_LEARNING_EPISODE_PARKED_MEASURED_WITHOUT_VERIFIER_FAILURE"):
+        validate_nexus_learning_episode(forged)
