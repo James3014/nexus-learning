@@ -35,6 +35,9 @@ _POLARITIES = frozenset({OUTCOME_POLARITY_SUCCESS, OUTCOME_POLARITY_FAILURE})
 _REFLECTABLE_OUTCOMES = frozenset({"SUCCEEDED", "FAILED"})
 _EVIDENCE_REF_KEYS = ("receipt", "evidence_ref", "receipt_id")
 _TITLE_MAX = 120
+_BODY_MAX = 2000
+_LIST_MAX = 20
+_ITEM_MAX = 300
 _EVIDENCE_PROMPT_MAX = 600
 _DEFAULT_CONFIDENCE = 0.5
 _DETERMINISTIC_CONFIDENCE = 0.3
@@ -119,10 +122,10 @@ def build_lesson(
 ) -> dict[str, Any]:
     """Normalize lesson content into the canonical v1 shape and validate it."""
     clean_title = _text(title)[:_TITLE_MAX].strip()
-    clean_body = _text(lesson_body)
+    clean_body = _text(lesson_body)[:_BODY_MAX].strip()
     sources = _unique_sorted(source_episode_ids)
-    applies = _unique_ordered(applies_when)
-    avoid = _unique_ordered(avoid_when)
+    applies = [item[:_ITEM_MAX] for item in _unique_ordered(applies_when)][:_LIST_MAX]
+    avoid = [item[:_ITEM_MAX] for item in _unique_ordered(avoid_when)][:_LIST_MAX]
     polarity = _text(outcome_polarity)
     origin = _text(evidence_origin)
     lesson_id = _compute_lesson_id(
@@ -168,6 +171,12 @@ def validate_lesson(lesson: Mapping[str, Any]) -> None:
         raise ValueError("LESSON_SCHEMA_MISMATCH")
     if not _text(lesson.get("title")) or not _text(lesson.get("lesson_body")):
         raise ValueError("LESSON_CONTENT_REQUIRED")
+    if len(_text(lesson.get("lesson_body"))) > _BODY_MAX or len(_text(lesson.get("title"))) > _TITLE_MAX:
+        raise ValueError("LESSON_CONTENT_TOO_LONG")
+    for key in ("applies_when", "avoid_when"):
+        items = lesson.get(key) or []
+        if len(items) > _LIST_MAX or any(len(_text(item)) > _ITEM_MAX for item in items):
+            raise ValueError("LESSON_CONTENT_TOO_LONG")
     sources = lesson.get("source_episode_ids")
     if not isinstance(sources, (list, tuple)) or not _unique_sorted(sources):
         raise ValueError("LESSON_PROVENANCE_REQUIRED")

@@ -400,3 +400,26 @@ def test_build_reflection_prompt_truncates_evidence() -> None:
     assert "terminal_outcome=SUCCEEDED" in prompt
     assert "x" * 601 not in prompt
     assert prompt.endswith("Output JSON only.")
+
+
+def test_build_lesson_bounds_text_and_lists() -> None:
+    from nexus_learning.lessons import build_lesson, validate_lesson
+
+    lesson = build_lesson(
+        title="t" * 500,
+        lesson_body="b" * 5000,
+        source_episode_ids=["lep:1"],
+        outcome_polarity="success",
+        applies_when=[f"cond-{i}-" + "x" * 400 for i in range(50)],
+        avoid_when=["a" * 400],
+    )
+    assert len(lesson["title"]) == 120
+    assert len(lesson["lesson_body"]) == 2000
+    assert len(lesson["applies_when"]) == 20
+    assert all(len(item) <= 300 for item in lesson["applies_when"] + lesson["avoid_when"])
+    validate_lesson(lesson)
+
+    forged = dict(lesson)
+    forged["lesson_body"] = "b" * 2001
+    with pytest.raises(ValueError, match="LESSON_CONTENT_TOO_LONG"):
+        validate_lesson(forged)
