@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from nexus_learning._atomic_io import _atomic_write_text
 from nexus_learning.experiment_integrity import (
     CALIBRATED,
     TERMINAL_NEGATIVE,
@@ -1552,9 +1553,8 @@ def save_promoted_learning_policy(
         "penalty_candidates": penalty_candidates,
         "enforce_penalties": bool(penalty_candidates),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    _atomic_write_text(
+        path, json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True)
     )
     return policy
 
