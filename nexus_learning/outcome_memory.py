@@ -19,6 +19,20 @@ from nexus_learning._atomic_io import _atomic_write_text
 from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_root
 
 OUTCOME_MEMORY_SCHEMA = "nexus_outcome_memory_episode.v1"
+WORKER_WRITE_SCHEMA = "nexus_outcome_memory_worker_write.v1"
+# Fields only the qualified episode producer may assert; worker writes cannot.
+_WORKER_WRITE_RESERVED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "idempotency_key",
+        "qualification_status",
+        "qualification_evidence_present",
+        "trust_mismatch",
+        "auto_replay_allowed",
+        "receipts",
+        "solved",
+    }
+)
 LEARNING_EPISODE_SCHEMA = "nexus.learning_episode.v1"
 DYNAMIC_LEARNING_POLICY_SCHEMA = "nexus_dynamic_learning_policy.v1"
 TERMINAL_OUTCOMES = frozenset(
@@ -316,7 +330,8 @@ class OutcomeMemoryManager:
         eligible_records = [
             record
             for record in records
-            if not bool(record.get("trust_mismatch", False))
+            if record.get("schema_version") != WORKER_WRITE_SCHEMA
+            and not bool(record.get("trust_mismatch", False))
             and (
                 (
                     str(record.get("qualification_status") or "UNQUALIFIED").upper() == "QUALIFIED"
@@ -410,8 +425,14 @@ class OutcomeMemoryManager:
             if needs_separator:
                 with storage_path.open("ab") as handle:
                     handle.write(b"\n")
+            row = {
+                key: value
+                for key, value in receipt.items()
+                if key not in _WORKER_WRITE_RESERVED_FIELDS
+            }
+            row["schema_version"] = WORKER_WRITE_SCHEMA
             with storage_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         return {
             "status": "PASS",
             "storage_path": str(cls.STORAGE_PATH),
@@ -509,7 +530,11 @@ def _load_idempotency_keys(storage_path: Path) -> set[str]:
             payload = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(payload, Mapping) and payload.get("idempotency_key"):
+        if (
+            isinstance(payload, Mapping)
+            and payload.get("schema_version") != WORKER_WRITE_SCHEMA
+            and payload.get("idempotency_key")
+        ):
             keys.add(str(payload["idempotency_key"]))
     return keys
 

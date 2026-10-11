@@ -29,6 +29,7 @@ from nexus_learning.effectiveness_measurement import (
 )
 from nexus_learning.effectiveness_measurement import (
     compare_workflows_at_required_quality,
+    paired_memory_uplift,
 )
 from nexus_learning.experiment_integrity import (
     CALIBRATED,
@@ -266,8 +267,18 @@ def _decide(
 ) -> dict[str, Any]:
     if _scorecard_problem(scorecard) is not None:
         return _result(ADOPTION_DECISION_REJECT, [REASON_SCORECARD_INVALID])
-    paired = scorecard["paired_memory_uplift"]
     rows = [dict(row) for row in scorecard["rows"]]
+    # The supplied summary is a claim; the pair count gate must be recomputed
+    # from the rows it summarizes.
+    try:
+        paired = paired_memory_uplift(rows)
+    except ValueError:
+        return _result(ADOPTION_DECISION_REJECT, [REASON_SCORECARD_INVALID])
+    supplied = scorecard["paired_memory_uplift"]
+    if int(supplied.get("eligible") or 0) != paired["eligible"] or sorted(
+        str(item) for item in supplied.get("eligible_fingerprints") or []
+    ) != sorted(paired["eligible_fingerprints"]):
+        return _result(ADOPTION_DECISION_REJECT, [REASON_SCORECARD_INVALID])
     uplift_summary = _uplift_summary(paired, rows, min_eligible_pairs)
 
     # 2. Only physically observed rows may ground a policy.
@@ -569,7 +580,10 @@ class AdoptionStore:
         return self._write(self._state_root.rollback_path, payload)
 
     def read_adoption(self) -> dict[str, Any] | None:
-        return self._read(self._state_root.adoption_path)
+        adoption = self._read(self._state_root.adoption_path)
+        if adoption is not None:
+            validate_learning_policy_adoption(adoption)
+        return adoption
 
     def read_rollback(self) -> dict[str, Any] | None:
         return self._read(self._state_root.rollback_path)
