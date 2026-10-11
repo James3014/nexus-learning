@@ -15,6 +15,7 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX thread fallback
     fcntl = None  # type: ignore[assignment]
 
+from nexus_learning._atomic_io import _atomic_write_text
 from nexus_learning.state_root import LearningStateRoot, resolve_learning_state_root
 
 OUTCOME_MEMORY_SCHEMA = "nexus_outcome_memory_episode.v1"
@@ -377,10 +378,9 @@ class OutcomeMemoryManager:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         policy_path = state_root.dynamic_policy_path
-        policy_path.parent.mkdir(parents=True, exist_ok=True)
-        policy_path.write_text(
+        _atomic_write_text(
+            policy_path,
             json.dumps(policy, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
         return policy
 
