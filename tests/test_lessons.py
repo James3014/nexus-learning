@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from nexus_learning import (
     LessonStore,
     build_lesson,
     build_reflection_prompt,
+    embedding_text_for_lesson,
     load_lessons,
     reflect_episodes,
     retrieve_lessons,
@@ -41,6 +43,7 @@ LESSON_KEYS = {
     "evidence_origin",
     "retrieval_eligible",
     "tags",
+    "embedding",
 }
 
 
@@ -309,6 +312,7 @@ def test_reflect_with_fenced_judge_output() -> None:
         "kind": "judge",
         "model": "fake-model",
         "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+        "embed_model": "",
     }
     assert lesson["retrieval_eligible"] is True
     assert lesson["source_episode_ids"] == [episodes[0]["episode_id"]]
@@ -626,3 +630,211 @@ def test_deterministic_fallback_tags_include_task_id() -> None:
     assert lessons[0]["reflector"]["kind"] == "deterministic"
     assert "task:task-tag" in lessons[0]["tags"]
     assert "source:unit" in lessons[0]["tags"]
+
+
+def _vec(seed: float, size: int = 16) -> list[float]:
+    return [seed + i * 0.1 for i in range(size)]
+
+
+def test_embedding_stored_validated_and_round_tripped(tmp_path: Path) -> None:
+    vector = [0.1 * (i + 1) for i in range(8)]
+    lesson = _base_lesson(embedding=vector)
+    assert lesson["embedding"] == vector
+    validate_lesson(lesson)
+    assert _base_lesson()["embedding"] is None
+
+    store = LessonStore(LearningStateRoot(tmp_path))
+    assert store.append(lesson) is True
+    loaded = store.load()
+    assert loaded == [lesson]
+    assert loaded[0]["embedding"] == vector
+
+
+def test_embedding_does_not_change_lesson_id() -> None:
+    assert _base_lesson(embedding=_vec(0.2))["lesson_id"] == _base_lesson()["lesson_id"]
+    assert (
+        _base_lesson(embedding=_vec(0.2))["lesson_id"]
+        == _base_lesson(embedding=_vec(0.9), created_at="2026-06-01T00:00:00+00:00")["lesson_id"]
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8",
+        [0.1] * 7,
+        [0.1] * 4097,
+        [0.1] * 7 + [float("nan")],
+        [0.1] * 7 + [float("inf")],
+        [0.1] * 7 + ["0.2"],
+        [0.1] * 7 + [True],
+        {"0": 0.1},
+    ],
+)
+def test_embedding_invalid_is_rejected(bad: Any) -> None:
+    with pytest.raises(ValueError, match="LESSON_EMBEDDING_INVALID"):
+        _base_lesson(embedding=bad)
+    forged = dict(_base_lesson(), embedding=bad)
+    with pytest.raises(ValueError, match="LESSON_EMBEDDING_INVALID"):
+        validate_lesson(forged)
+
+
+def test_embedding_text_layout_and_bound() -> None:
+    lesson = _base_lesson(
+        title="Round",
+        lesson_body="Half-even",
+        applies_when=["split", "total"],
+        tags=["rounding", "money"],
+    )
+    assert embedding_text_for_lesson(lesson) == "Round\nHalf-even\nsplit; total\nmoney; rounding"
+    bound = _base_lesson(applies_when=[f"c{i}-" + "x" * 290 for i in range(20)])
+    assert len(embedding_text_for_lesson(bound)) == 4000
+
+
+def test_reflect_embeds_lessons_and_records_model() -> None:
+    episodes = [_episode("emb-1")]
+    baseline = reflect_episodes(episodes)
+    calls: list[str] = []
+
+    def embed(text: str) -> list[float]:
+        calls.append(text)
+        return _vec(0.5)
+
+    lessons = reflect_episodes(episodes, embed=embed, embed_model="fake-embed")
+    assert len(lessons) == 1
+    lesson = lessons[0]
+    assert lesson["embedding"] == _vec(0.5)
+    assert lesson["reflector"]["embed_model"] == "fake-embed"
+    assert lesson["lesson_id"] == baseline[0]["lesson_id"]
+    assert calls == [embedding_text_for_lesson(lesson)]
+
+
+def test_reflect_raising_embed_leaves_embedding_none() -> None:
+    def broken(text: str) -> list[float]:
+        raise RuntimeError("embedder down")
+
+    lessons = reflect_episodes([_episode("emb-x")], embed=broken)
+    assert len(lessons) == 1
+    assert lessons[0]["embedding"] is None
+    assert lessons[0]["reflector"]["embed_model"] == ""
+    validate_lesson(lessons[0])
+
+
+@pytest.mark.parametrize("result", [None, [0.1] * 3, ["a"] * 16, [float("nan")] * 16])
+def test_reflect_invalid_embed_result_leaves_embedding_none(result: Any) -> None:
+    lessons = reflect_episodes([_episode("emb-bad")], embed=lambda text: result)
+    assert lessons[0]["embedding"] is None
+
+
+def test_prompt_includes_patch_excerpt_and_fix_recipe_request() -> None:
+    episode = _episode("patch-1", evidence={"receipt": "r", "patch_excerpt": "- x = 1\n+ x = 2"})
+    prompt = build_reflection_prompt([episode], "success")
+    assert "Successful patch excerpt:" in prompt
+    assert "+ x = 2" in prompt
+    assert "fix_recipe" in prompt
+    plain = build_reflection_prompt([_episode("patch-2")], "success")
+    assert "Successful patch excerpt:" not in plain
+
+
+def test_patch_excerpt_truncated_to_1500_chars() -> None:
+    episode = _episode("patch-big", evidence={"receipt": "r", "patch_excerpt": "p" * 3000})
+    prompt = build_reflection_prompt([episode], "success")
+    assert "p" * 1500 in prompt
+    assert "p" * 1501 not in prompt
+
+
+def test_fix_recipe_lands_in_lesson_body() -> None:
+    recipe = "def total(xs):\n    return sum(round(x, 2) for x in xs)"
+    reply = json.dumps({
+        "title": "Round shares",
+        "lesson": "Round each share to cents.",
+        "applies_when": ["split"],
+        "avoid_when": [],
+        "fix_recipe": recipe,
+    })
+    lessons = reflect_episodes([_episode("fr-1")], judge=_FakeJudge(reply))
+    lesson = lessons[0]
+    assert lesson["reflector"]["kind"] == "judge"
+    assert lesson["lesson_body"].startswith("Round each share to cents.")
+    assert "Fix recipe:\n" + recipe in lesson["lesson_body"]
+
+
+def test_fix_recipe_truncated_without_touching_original_body() -> None:
+    original = "Round each share to cents with half-even rounding."
+    reply = json.dumps({"title": "t", "lesson": original, "fix_recipe": "x = 1\n" * 1000})
+    lessons = reflect_episodes([_episode("fr-2")], judge=_FakeJudge(reply))
+    body = lessons[0]["lesson_body"]
+    assert lessons[0]["reflector"]["kind"] == "judge"
+    assert len(body) <= 2000 and len(body) > 1900
+    assert body.startswith(original + "\n\nFix recipe:\n")
+
+
+def _embedded_lesson(body: str, *, title: str, vector: list[float]) -> dict[str, Any]:
+    return _base_lesson(
+        title=title,
+        lesson_body=body,
+        applies_when=[],
+        source_episode_ids=[f"lep:{title}"],
+        embedding=vector,
+    )
+
+
+def test_hybrid_semantic_breaks_equal_keyword_tie() -> None:
+    query_vector = [1.0] + [0.0] * 7
+    near = _embedded_lesson(
+        "Flaky pytest fixture guard alpha.",
+        title="near",
+        vector=[0.9, 0.1] + [0.0] * 6,
+    )
+    far = _embedded_lesson(
+        "Flaky pytest fixture guard beta.",
+        title="far",
+        vector=[0.0, 1.0] + [0.0] * 6,
+    )
+    rows = retrieve_lessons(
+        [far, near],
+        query_text="flaky pytest fixture",
+        limit=2,
+        query_embedding=query_vector,
+    )
+    assert [row["title"] for row in rows] == ["near", "far"]
+    assert rows[0]["keyword_score"] == pytest.approx(1.0)
+    assert rows[0]["semantic_score"] > rows[1]["semantic_score"]
+    assert rows[0]["relevance_score"] > rows[1]["relevance_score"]
+
+
+def test_hybrid_includes_zero_overlap_lesson_with_high_cosine() -> None:
+    query_vector = [1.0] + [0.0] * 7
+    semantic_only = _embedded_lesson(
+        "Unrelated deployment checklist.",
+        title="semantic",
+        vector=[0.9, math.sqrt(0.19)] + [0.0] * 6,
+    )
+    rows = retrieve_lessons(
+        [semantic_only],
+        query_text="flaky pytest fixture",
+        query_embedding=query_vector,
+    )
+    assert [row["title"] for row in rows] == ["semantic"]
+    row = rows[0]
+    assert row["keyword_score"] == pytest.approx(0.0)
+    assert row["semantic_score"] == pytest.approx(0.9)
+    assert row["relevance_score"] == pytest.approx(0.6 * 0.9)
+
+
+def test_keyword_only_ordering_without_query_embedding() -> None:
+    lessons = [
+        _embedded_lesson("Rounding money amounts drifts totals.", title="plain", vector=_vec(0.3, 8)),
+        _base_lesson(
+            title="tagged",
+            lesson_body="Rounding money amounts drifts totals.",
+            applies_when=[],
+            source_episode_ids=["lep:tagged"],
+            tags=["rounding"],
+            embedding=_vec(0.7, 8),
+        ),
+    ]
+    rows = retrieve_lessons(lessons, query_text="rounding", limit=2)
+    assert [row["title"] for row in rows] == ["tagged", "plain"]
+    assert all(row["semantic_score"] is None for row in rows)
+    assert all(row["keyword_score"] == row["relevance_score"] for row in rows)
