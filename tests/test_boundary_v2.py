@@ -96,3 +96,24 @@ def test_every_package_module_is_classified() -> None:
     unclassified = modules - CORE - FROZEN
     assert not unclassified, f"classify in CORE or FROZEN: {sorted(unclassified)}"
     assert CORE.isdisjoint(FROZEN)
+
+
+def _stage_table_rows() -> list[str]:
+    lines = DOC.read_text(encoding="utf-8").splitlines()
+    return [line for line in lines if line.startswith("| ") and "---" not in line]
+
+
+def test_stage_table_names_every_core_module() -> None:
+    text = DOC.read_text(encoding="utf-8")
+    missing = [name for name in sorted(CORE) if f"`{name}`" not in text]
+    assert not missing, f"BOUNDARY.md stage table does not name: {missing}"
+
+
+def test_planned_stage_modules_do_not_exist_yet() -> None:
+    for row in _stage_table_rows():
+        if "planned" not in row:
+            continue
+        for name in re.findall(r"`([a-z_]+)`", row):
+            assert not (PKG_DIR / f"{name}.py").is_file(), (
+                f"BOUNDARY.md marks `{name}` as planned but nexus_learning/{name}.py exists"
+            )
