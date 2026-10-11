@@ -9,14 +9,12 @@ routes, planners, or workers, and every result carries ``authority_effect: False
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from nexus_learning._atomic_io import _atomic_write_text
 from nexus_learning.contracts import (
     build_learning_policy_adoption,
     build_learning_policy_recommendation,
@@ -585,20 +583,8 @@ class AdoptionStore:
 
     @staticmethod
     def _write(target: Path, payload: Mapping[str, Any]) -> Path:
-        target.parent.mkdir(parents=True, exist_ok=True)
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-        fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, target)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(temporary)
-            raise
-        return target
+        return _atomic_write_text(target, data)
 
 
 __all__ = [

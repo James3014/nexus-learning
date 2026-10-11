@@ -8,7 +8,7 @@ v1 split by authority (pure contracts only) and left the learning loop unclosed:
 
 | Stage | Owner | Modules / contract | Notes |
 |---|---|---|---|
-| Storage | nexus-learning | `outcome_memory`, `closure_effectiveness`, `episode_projection`, `state_root`, `retrieval_audit` | explicit state root, single writer, content-addressed episode ids. |
+| Storage | nexus-learning | `outcome_memory`, `closure_effectiveness`, `episode_projection`, `state_root`, `retrieval_audit`, `_atomic_io` (shared atomic-write helper, not a stage) | explicit state root, single writer, content-addressed episode ids. |
 | Reflection | nexus-learning | `lessons` (Phase 1, implemented): canonical `nexus.learning_lesson.v1` schema, lesson store, reflector that distills episodes into lessons through an injected judge callable | package stays I/O-free except the lesson store; no provider dependency. |
 | Retrieval | nexus-runtime (read-only port) | `LearningReadPort` in nexus-runtime; nexus-learning provides deterministic retrieval helpers only | consumers must record `retrieved_lesson_ids` and `applied_lesson_ids` on the episode. |
 | Measurement | nexus-learning | `effectiveness_measurement` (`paired_memory_uplift`, `replay_scorecard`, `compare_workflows_at_required_quality`), `coverage_contract`, `coverage_probes` | memory-on vs memory-off evidence is the only admissible uplift evidence. |
