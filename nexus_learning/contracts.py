@@ -886,22 +886,11 @@ def build_learning_policy_adoption(
         raise ValueError("ADOPTION_MISSING_ROLLBACK_TARGET")
 
     # Authority invariant: No direct planner route override allowed
-    if any(
-        k in target_policy_delta
-        for k in (
-            "CapabilityPlanner",
-            "route_authority",
-            "workforce_admission",
-            "active_route_override",
-        )
-    ):
+    if any(k in target_policy_delta for k in _ADOPTION_FORBIDDEN_DELTA_KEYS):
         raise ValueError("ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
 
-    prev_canonical = json.dumps(previous_policy, sort_keys=True, separators=(",", ":"))
-    prev_hash = hashlib.sha256(prev_canonical.encode("utf-8")).hexdigest()
-
-    delta_canonical = json.dumps(target_policy_delta, sort_keys=True, separators=(",", ":"))
-    delta_hash = hashlib.sha256(delta_canonical.encode("utf-8")).hexdigest()
+    prev_hash = _policy_hash(previous_policy)
+    delta_hash = _policy_hash(target_policy_delta)
 
     payload: dict[str, Any] = {
         "schema": LEARNING_POLICY_ADOPTION_SCHEMA,
@@ -928,6 +917,20 @@ def build_learning_policy_adoption(
     payload["adoption_id"] = ad_id
     validate_learning_policy_adoption(payload)
     return payload
+
+
+_ADOPTION_FORBIDDEN_DELTA_KEYS = (
+    "CapabilityPlanner",
+    "route_authority",
+    "workforce_admission",
+    "active_route_override",
+)
+_ADOPTION_STATUSES = frozenset({"ACTIVE_CANDIDATE"})
+
+
+def _policy_hash(policy: Any) -> str:
+    canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
@@ -971,6 +974,23 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
     # Owner authority check
     if not adoption.get("owner_authority_reference"):
         raise ValueError("ADOPTION_OWNER_AUTHORITY_MISSING")
+
+    # Consumers re-check the producer's authority bounds: the content address
+    # alone proves consistency, not that the delta stayed within authority.
+    delta = adoption.get("target_policy_delta")
+    previous = adoption.get("previous_policy")
+    if not isinstance(delta, dict) or not isinstance(previous, dict):
+        raise ValueError("ADOPTION_POLICY_SHAPE_INVALID")
+    if any(k in delta for k in _ADOPTION_FORBIDDEN_DELTA_KEYS):
+        raise ValueError("ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
+    if adoption.get("target_policy_hash") != _policy_hash(delta):
+        raise ValueError("ADOPTION_TARGET_POLICY_HASH_MISMATCH")
+    if adoption.get("previous_policy_hash") != _policy_hash(previous):
+        raise ValueError("ADOPTION_PREVIOUS_POLICY_HASH_MISMATCH")
+    if adoption.get("adoption_status") not in _ADOPTION_STATUSES:
+        raise ValueError("ADOPTION_STATUS_INVALID")
+    if adoption.get("claim_ceiling") != "SUPPORTED_POLICY_RECOMMENDATION":
+        raise ValueError("ADOPTION_CLAIM_CEILING_INVALID")
 
     # Authority invariants
     if adoption.get("direct_route_mutation_allowed") is not False:
