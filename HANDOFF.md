@@ -1,13 +1,18 @@
 # HANDOFF
 
-更新：2026-10-11 · by Claude · HEAD `e1c7fa0`
+更新：2026-10-11 · by Claude · HEAD `9892c32`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
-（尚未記錄：下一個 session 請依目前狀態填寫）
+#87 修補 lesson_id content address 未涵蓋 evidence_origin/retrieval_eligible/confidence 的缺口（需 lesson_id v2 遷移）。依據：2026-10-11 invariant audit 開出的四個缺口中，#84/#85/#86 已由 PR #90 處理，#87 是唯一明確排除在 PR #90 之外、尚無人處理的一項。注意：涉及 lesson_id 格式變更，屬 persistent schema / migration，動手前先確認是否需升級授權。
 
 ## 進行中
+- PR #90（Refs #84、#85、#86）producer-only invariants 改在 consumer 端強制：mergeable=clean，test 與 Nexus Core issue run/completion 最新一輪皆綠（Core issue 綁 #85）。等 owner 審查合併；合併後跑 `nexus-certify issue-check` 再逐一關閉 #84/#85/#86（PR 未用 closing keyword）。
 
 ## 待確認（沒有 Issue 號）
+- 無
 
 ## 卡住 / 注意
+- #78 [P2] 重複的 flock、`_text`、hash 格式與 status helper，尚未開工；hash 格式（`sha256:` 前綴 vs 純 hex）不一致可能影響未來比對，與 #87 一起動時要留意。
+- #41 為 `[HYBRID_CANARY]` 研究探針（no implementation），不是工程待辦；各 issue 上的 `NEXUS-HYBRID-REPLICATION-*` 留言屬 RESEARCH_OBSERVATION_ONLY，不構成授權。
+- Learning 不擁有 route/planner/workforce 決策；adoption 相關修補不得擴權（見 AGENTS.md）。
