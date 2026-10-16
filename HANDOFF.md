@@ -1,6 +1,6 @@
 # HANDOFF
 
-更新：2026-10-12 · by Claude · HEAD `a48bd87`
+更新：2026-10-16 · by Claude · HEAD `4117a42`+#96 本地 commit
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
@@ -8,6 +8,8 @@
 
 ## 進行中
 - PR #90（Refs #84、#85、#86）producer-only invariants 改在 consumer 端強制：mergeable=clean，test 與 Nexus Core issue run/completion 最新一輪皆綠（Core issue 綁 #85）。等 owner 審查合併；合併後跑 `nexus-certify issue-check` 再逐一關閉 #84/#85/#86（PR 未用 closing keyword）。
+
+- #96 程式端已完成（本地分支 fix/lessons-abstract-only-96，未推送）：fix_recipe 獨立欄位、檢索 row 無 recipe、新增 `injection_text`、prompt 改要求程序層級 lesson。量測（校正題組、≥3 次重跑、配對 uplift 與退步）尚未做，屬實驗環節。
 
 ## 待確認（沒有 Issue 號）
 - 無
