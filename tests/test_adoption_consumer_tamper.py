@@ -199,3 +199,80 @@ def test_tampered_or_rejected_validation_rejected(genuine):
     bad_rec["observed_effect"] = "forged"
     with pytest.raises(ValueError, match="RECOMMENDATION_"):
         validate_learning_policy_adoption(adoption, recommendation=bad_rec, validation=validation)
+
+
+# --- Codex adversarial review r1 (PR #108) -----------------------------------
+
+
+def _deep(levels):
+    value = {"leaf": True}
+    for _ in range(levels):
+        value = {"x": value}
+    return value
+
+
+def test_deeply_nested_delta_rejected_with_value_error(tmp_path):
+    adoption = forged({"episodic_memory_injection": {"enabled": True}, "deep": _deep(200)})
+    assert_rejected_everywhere(adoption, tmp_path, "ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
+
+
+@pytest.mark.parametrize("enabled", ["false", 0, 1, None, "true"])
+def test_non_bool_injection_enabled_rejected(tmp_path, enabled):
+    adoption = forged({"episodic_memory_injection": {"enabled": enabled}})
+    assert_rejected_everywhere(adoption, tmp_path, "ADOPTION_POLICY_SHAPE_INVALID")
+
+
+def test_validation_id_not_derived_from_hash_rejected(genuine):
+    adoption, recommendation, validation = genuine
+    bad_val = copy.deepcopy(validation)
+    bad_val["validation_id"] = "lval:forged"
+    bad = _reseal(adoption, validation_id="lval:forged")
+    with pytest.raises(ValueError, match="ADOPTION_VALIDATION_ID_TAMPERED"):
+        validate_learning_policy_adoption(bad, recommendation=recommendation, validation=bad_val)
+
+
+def _genuine_rollback(adoption):
+    from nexus_learning.contracts import build_learning_policy_rollback
+
+    return build_learning_policy_rollback(adoption=adoption, reason="regression", triggered_by="owner")
+
+
+def _reseal_rollback(rollback, **changes):
+    from nexus_learning.contracts import canonical_rollback_identity
+
+    rollback = copy.deepcopy(rollback)
+    rollback.update(changes)
+    rollback["rollback_hash"], rollback["rollback_id"] = canonical_rollback_identity(rollback)
+    return rollback
+
+
+def test_genuine_rollback_still_rolls_back(genuine):
+    adoption, _, _ = genuine
+    budget = project(adoption, rollback=_genuine_rollback(adoption))
+    assert budget["learning_policy"]["adoption_lineage"]["status"] == "ROLLED_BACK"
+
+
+@pytest.mark.parametrize(
+    "changes,code",
+    [
+        ({"rolled_back_policy_hash": "0" * 64}, "ROLLBACK_POLICY_HASH_MISMATCH"),
+        ({"rollback_status": "ACTIVE"}, "ROLLBACK_STATUS_INVALID"),
+        ({"adoption_hash": "0" * 64}, "PROJECTION_ROLLBACK_ADOPTION_MISMATCH"),
+        ({"previous_policy_hash": "0" * 64}, "PROJECTION_ROLLBACK_ADOPTION_MISMATCH"),
+        ({"recommendation_hash": "0" * 64}, "PROJECTION_ROLLBACK_ADOPTION_MISMATCH"),
+    ],
+)
+def test_resealed_forged_rollback_rejected(genuine, changes, code):
+    adoption, _, _ = genuine
+    bad = _reseal_rollback(_genuine_rollback(adoption), **changes)
+    with pytest.raises(ValueError, match=code):
+        project(adoption, rollback=bad)
+
+
+def test_non_mapping_rollback_file_is_not_treated_as_absent(tmp_path):
+    store = AdoptionStore(LearningStateRoot(tmp_path))
+    path = store._state_root.rollback_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[]")
+    with pytest.raises(ValueError, match="ROLLBACK_NOT_A_MAPPING"):
+        store.read_rollback()

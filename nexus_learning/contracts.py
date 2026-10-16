@@ -846,6 +846,8 @@ def _verify_adoption_lineage(
     computed_val_hash = hashlib.sha256(val_canonical.encode("utf-8")).hexdigest()
     if validation.get("validation_hash") != computed_val_hash:
         raise ValueError("ADOPTION_VALIDATION_HASH_TAMPERED")
+    if validation.get("validation_id") != f"lval:{computed_val_hash[:24]}":
+        raise ValueError("ADOPTION_VALIDATION_ID_TAMPERED")
 
     # Scope confinement: Must not exceed recommendation scope
     rec_scope = recommendation.get("applicable_scope", {})
@@ -944,18 +946,25 @@ _ADOPTION_FORBIDDEN_DELTA_KEYS = (
 )
 _ADOPTION_FORBIDDEN_DELTA_KEYS_FOLDED = frozenset(k.lower() for k in _ADOPTION_FORBIDDEN_DELTA_KEYS)
 _ADOPTION_STATUSES = frozenset({"ACTIVE_CANDIDATE"})
+_ADOPTION_MAX_DELTA_DEPTH = 64
 
 
-def _has_forbidden_delta_key(value: Any) -> bool:
-    """True if any key at any depth matches a forbidden key, case-insensitively."""
+def _has_forbidden_delta_key(value: Any, _depth: int = 0) -> bool:
+    """True if any key at any depth matches a forbidden key, case-insensitively.
+
+    Nesting deeper than ``_ADOPTION_MAX_DELTA_DEPTH`` is treated as forbidden
+    (fail closed with the validator's ValueError, never RecursionError).
+    """
+    if _depth > _ADOPTION_MAX_DELTA_DEPTH:
+        return True
     if isinstance(value, Mapping):
         for key, child in value.items():
             if str(key).strip().lower() in _ADOPTION_FORBIDDEN_DELTA_KEYS_FOLDED:
                 return True
-            if _has_forbidden_delta_key(child):
+            if _has_forbidden_delta_key(child, _depth + 1):
                 return True
     elif isinstance(value, (list, tuple)):
-        return any(_has_forbidden_delta_key(child) for child in value)
+        return any(_has_forbidden_delta_key(child, _depth + 1) for child in value)
     return False
 
 
@@ -1030,6 +1039,8 @@ def validate_learning_policy_adoption(
         raise ValueError("ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
     injection = delta.get("episodic_memory_injection", {})
     if not isinstance(injection, dict):
+        raise ValueError("ADOPTION_POLICY_SHAPE_INVALID")
+    if "enabled" in injection and not isinstance(injection["enabled"], bool):
         raise ValueError("ADOPTION_POLICY_SHAPE_INVALID")
     if adoption.get("target_policy_hash") != _policy_hash(delta):
         raise ValueError("ADOPTION_TARGET_POLICY_HASH_MISMATCH")
@@ -1157,6 +1168,13 @@ def validate_learning_policy_rollback(rollback: dict[str, Any]) -> None:
     expected_hash, expected_id = canonical_rollback_identity(rollback)
     if stored_hash != expected_hash or stored_id != expected_id:
         raise ValueError("ROLLBACK_CONTENT_ADDRESS_MISMATCH")
+    if rollback.get("rollback_status") != "ROLLED_BACK":
+        raise ValueError("ROLLBACK_STATUS_INVALID")
+    rolled_back = rollback.get("rolled_back_policy")
+    if not isinstance(rolled_back, dict) or rollback.get("rolled_back_policy_hash") != _policy_hash(
+        rolled_back
+    ):
+        raise ValueError("ROLLBACK_POLICY_HASH_MISMATCH")
 
 
 def project_adoption_into_planner_budget(
@@ -1178,7 +1196,13 @@ def project_adoption_into_planner_budget(
     validate_learning_policy_adoption(adoption, recommendation=recommendation, validation=validation)
     if rollback is not None:
         validate_learning_policy_rollback(rollback)
-        if rollback.get("adoption_id") != adoption.get("adoption_id"):
+        if (
+            rollback.get("adoption_id") != adoption.get("adoption_id")
+            or rollback.get("adoption_hash") != adoption.get("adoption_hash")
+            or rollback.get("recommendation_id") != adoption.get("recommendation_id")
+            or rollback.get("recommendation_hash") != adoption.get("recommendation_hash")
+            or rollback.get("previous_policy_hash") != adoption.get("target_policy_hash")
+        ):
             raise ValueError("PROJECTION_ROLLBACK_ADOPTION_MISMATCH")
         # Rollback active: return clean inactive budget
         return {
