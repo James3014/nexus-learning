@@ -586,7 +586,10 @@ class AdoptionStore:
         return adoption
 
     def read_rollback(self) -> dict[str, Any] | None:
-        return self._read(self._state_root.rollback_path)
+        rollback = self._read(self._state_root.rollback_path)
+        if rollback is not None:
+            validate_learning_policy_rollback(rollback)
+        return rollback
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any] | None:
