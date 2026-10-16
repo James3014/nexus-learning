@@ -69,6 +69,10 @@ _EFFECT_OUTCOMES = frozenset(
 )
 
 
+# Hash format note (identity values; do NOT change without a migration):
+# this helper returns BARE hex over json.dumps(sort_keys, compact separators,
+# default ensure_ascii=True). campaign_closeout._hash returns "sha256:" + hex
+# over ensure_ascii=False JSON. Pinned by tests/test_hash_format_compat.py.
 def _hash(payload: Any) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

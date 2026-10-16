@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any, Iterable, Mapping
 
+from nexus_learning._statuses import PASS_STATUSES
+
 SCHEMA = "nexus.learning_effectiveness_measurement.v1"
 _IDENTITY = (
     "task_fingerprint",
@@ -39,7 +41,7 @@ _REQUIRED = _IDENTITY + (
     "missingness_reasons",
     "ineligibility_reasons",
 )
-_PASS_STATUSES = {"pass", "passed", "success", "succeeded", "qualified"}
+_PASS_STATUSES = PASS_STATUSES
 _FAIL_STATUSES = {"fail", "failed", "failure", "blocked", "rejected"}
 _PASS_OUTCOMES = {"SUCCESS", "SUCCEEDED", "PASSED", "QUALIFIED"}
 _FAIL_OUTCOMES = {"FAIL", "FAILED", "FAILURE", "BLOCKED", "REJECTED"}

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus_learning._atomic_io import _atomic_write_text
+from nexus_learning._statuses import PASS_STATUSES
 from nexus_learning.contracts import (
     build_learning_policy_adoption,
     build_learning_policy_recommendation,
@@ -72,7 +73,7 @@ _QUALITY_UNMEASURED_FIELDS = (
     "monetary_cost_usd",
     "wall_time_seconds",
 )
-_PASS_STATUSES = frozenset({"pass", "passed", "success", "succeeded", "qualified"})
+_PASS_STATUSES = PASS_STATUSES
 _FAIL_STATUSES = frozenset({"fail", "failed", "failure", "blocked", "rejected"})
 _DEFAULT_CURRENT_POLICY = {"memory_retrieval": "shadow"}
 _DEFAULT_ROLLBACK_TARGET = {"target_state": {"memory_retrieval": "shadow"}}

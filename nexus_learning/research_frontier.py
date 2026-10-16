@@ -18,6 +18,8 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
+from nexus_learning._textutil import require_non_empty_text as _text
+
 LEARNING_BOUNDARY_STATUS = "FROZEN_RESEARCH_GOVERNANCE"  # see docs/architecture/BOUNDARY.md
 
 RESEARCH_FRONTIER_SCHEMA = "nexus.learning_research_frontier_governance.v1"
@@ -82,12 +84,6 @@ def _hash(payload: Any) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-
-
-def _text(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field} must be a non-empty string")
-    return value.strip()
 
 
 def classify_failure_attribution(
