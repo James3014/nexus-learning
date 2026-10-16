@@ -816,24 +816,17 @@ def canonical_adoption_identity(payload: dict[str, Any]) -> tuple[str, str]:
     return ad_hash, ad_id
 
 
-def build_learning_policy_adoption(
+def _verify_adoption_lineage(
+    recommendation: Mapping[str, Any],
+    validation: Mapping[str, Any],
     *,
-    owner_authority_reference: str,
-    recommendation: dict[str, Any],
-    validation: dict[str, Any],
+    adopted_scope: Mapping[str, Any],
     source_revision: str,
-    adopted_scope: dict[str, Any],
-    target_policy_delta: dict[str, Any],
-    previous_policy: dict[str, Any],
-    rollback_target: dict[str, Any],
-    effective_candidate_generation: str = "candidate_r7_g7",
-) -> dict[str, Any]:
-    """Construct an exact Owner-bound governed policy adoption artifact."""
-    if not owner_authority_reference or not str(owner_authority_reference).strip():
-        raise ValueError("ADOPTION_OWNER_AUTHORITY_MISSING")
-
-    # Validate incoming recommendation and validation
-    validate_learning_policy_recommendation(recommendation)
+) -> tuple[Any, Any]:
+    """Shared producer/consumer lineage checks; returns (recommendation_id, hash)."""
+    validate_learning_policy_recommendation(recommendation)  # type: ignore[arg-type]
+    if not isinstance(validation, Mapping):
+        raise ValueError("ADOPTION_VALIDATION_SCHEMA_INVALID")
     if validation.get("schema") != LEARNING_POLICY_VALIDATION_SCHEMA:
         raise ValueError("ADOPTION_VALIDATION_SCHEMA_INVALID")
     if validation.get("validation_disposition") != "VALIDATED_FOR_ADOPTION_CONSIDERATION":
@@ -855,6 +848,8 @@ def build_learning_policy_adoption(
     computed_val_hash = hashlib.sha256(val_canonical.encode("utf-8")).hexdigest()
     if validation.get("validation_hash") != computed_val_hash:
         raise ValueError("ADOPTION_VALIDATION_HASH_TAMPERED")
+    if validation.get("validation_id") != f"lval:{computed_val_hash[:24]}":
+        raise ValueError("ADOPTION_VALIDATION_ID_TAMPERED")
 
     # Scope confinement: Must not exceed recommendation scope
     rec_scope = recommendation.get("applicable_scope", {})
@@ -877,6 +872,32 @@ def build_learning_policy_adoption(
     if str(source_revision).strip() != str(recommendation.get("source_revision") or "").strip():
         raise ValueError("ADOPTION_SOURCE_REVISION_STALE")
 
+    return rec_id, rec_hash
+
+
+def build_learning_policy_adoption(
+    *,
+    owner_authority_reference: str,
+    recommendation: dict[str, Any],
+    validation: dict[str, Any],
+    source_revision: str,
+    adopted_scope: dict[str, Any],
+    target_policy_delta: dict[str, Any],
+    previous_policy: dict[str, Any],
+    rollback_target: dict[str, Any],
+    effective_candidate_generation: str = "candidate_r7_g7",
+) -> dict[str, Any]:
+    """Construct an exact Owner-bound governed policy adoption artifact."""
+    if not owner_authority_reference or not str(owner_authority_reference).strip():
+        raise ValueError("ADOPTION_OWNER_AUTHORITY_MISSING")
+
+    rec_id, rec_hash = _verify_adoption_lineage(
+        recommendation,
+        validation,
+        adopted_scope=adopted_scope,
+        source_revision=source_revision,
+    )
+
     # Rollback readiness
     if (
         not rollback_target
@@ -886,7 +907,7 @@ def build_learning_policy_adoption(
         raise ValueError("ADOPTION_MISSING_ROLLBACK_TARGET")
 
     # Authority invariant: No direct planner route override allowed
-    if any(k in target_policy_delta for k in _ADOPTION_FORBIDDEN_DELTA_KEYS):
+    if _has_forbidden_delta_key(target_policy_delta):
         raise ValueError("ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
 
     prev_hash = _policy_hash(previous_policy)
@@ -925,7 +946,28 @@ _ADOPTION_FORBIDDEN_DELTA_KEYS = (
     "workforce_admission",
     "active_route_override",
 )
+_ADOPTION_FORBIDDEN_DELTA_KEYS_FOLDED = frozenset(k.lower() for k in _ADOPTION_FORBIDDEN_DELTA_KEYS)
 _ADOPTION_STATUSES = frozenset({"ACTIVE_CANDIDATE"})
+_ADOPTION_MAX_DELTA_DEPTH = 64
+
+
+def _has_forbidden_delta_key(value: Any, _depth: int = 0) -> bool:
+    """True if any key at any depth matches a forbidden key, case-insensitively.
+
+    Nesting deeper than ``_ADOPTION_MAX_DELTA_DEPTH`` is treated as forbidden
+    (fail closed with the validator's ValueError, never RecursionError).
+    """
+    if _depth > _ADOPTION_MAX_DELTA_DEPTH:
+        return True
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key).strip().lower() in _ADOPTION_FORBIDDEN_DELTA_KEYS_FOLDED:
+                return True
+            if _has_forbidden_delta_key(child, _depth + 1):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(_has_forbidden_delta_key(child, _depth + 1) for child in value)
+    return False
 
 
 def _policy_hash(policy: Any) -> str:
@@ -933,8 +975,21 @@ def _policy_hash(policy: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
-    """Validate adoption identity, content address, and fail-closed bounds."""
+def validate_learning_policy_adoption(
+    adoption: dict[str, Any],
+    *,
+    recommendation: Mapping[str, Any] | None = None,
+    validation: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate adoption identity, content address, and fail-closed bounds.
+
+    Without ``recommendation`` and ``validation`` the adoption is only
+    self-consistent (content address, authority bounds): trust then rests on the
+    local file, not on its lineage (Issue #85). Supply both to also re-run the
+    producer's lineage checks; supplying only one raises ADOPTION_LINEAGE_INCOMPLETE.
+    """
+    if (recommendation is None) != (validation is None):
+        raise ValueError("ADOPTION_LINEAGE_INCOMPLETE")
     if not isinstance(adoption, dict):
         raise ValueError("ADOPTION_NOT_A_MAPPING")
     if adoption.get("schema") != LEARNING_POLICY_ADOPTION_SCHEMA:
@@ -972,7 +1027,8 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
         raise ValueError("ADOPTION_CONTENT_ADDRESS_MISMATCH")
 
     # Owner authority check
-    if not adoption.get("owner_authority_reference"):
+    owner = adoption.get("owner_authority_reference")
+    if not isinstance(owner, str) or not owner.strip():
         raise ValueError("ADOPTION_OWNER_AUTHORITY_MISSING")
 
     # Consumers re-check the producer's authority bounds: the content address
@@ -981,8 +1037,13 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
     previous = adoption.get("previous_policy")
     if not isinstance(delta, dict) or not isinstance(previous, dict):
         raise ValueError("ADOPTION_POLICY_SHAPE_INVALID")
-    if any(k in delta for k in _ADOPTION_FORBIDDEN_DELTA_KEYS):
+    if _has_forbidden_delta_key(delta):
         raise ValueError("ADOPTION_DIRECT_PLANNER_MUTATION_FORBIDDEN")
+    injection = delta.get("episodic_memory_injection", {})
+    if not isinstance(injection, dict):
+        raise ValueError("ADOPTION_POLICY_SHAPE_INVALID")
+    if "enabled" in injection and not isinstance(injection["enabled"], bool):
+        raise ValueError("ADOPTION_POLICY_SHAPE_INVALID")
     if adoption.get("target_policy_hash") != _policy_hash(delta):
         raise ValueError("ADOPTION_TARGET_POLICY_HASH_MISMATCH")
     if adoption.get("previous_policy_hash") != _policy_hash(previous):
@@ -1000,6 +1061,8 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
 
     # Scope check
     scope = adoption.get("adopted_scope", {})
+    if not isinstance(scope, dict):
+        raise ValueError("ADOPTION_SCOPE_OVERBROAD")
     if (
         not scope
         or scope.get("all_tasks")
@@ -1008,9 +1071,27 @@ def validate_learning_policy_adoption(adoption: dict[str, Any]) -> None:
     ):
         raise ValueError("ADOPTION_SCOPE_OVERBROAD")
 
-    # Rollback check
-    if not adoption.get("rollback_target"):
+    # Rollback check: same rule as the producer (a dict with a target_state).
+    rollback_target = adoption.get("rollback_target")
+    if not isinstance(rollback_target, dict) or not rollback_target.get("target_state"):
         raise ValueError("ADOPTION_MISSING_ROLLBACK_TARGET")
+
+    if recommendation is not None and validation is not None:
+        rec_id, rec_hash = _verify_adoption_lineage(
+            recommendation,
+            validation,
+            adopted_scope=scope,
+            source_revision=str(adoption.get("source_revision") or ""),
+        )
+        if (
+            adoption.get("recommendation_id") != rec_id
+            or adoption.get("recommendation_hash") != rec_hash
+        ):
+            raise ValueError("ADOPTION_LINEAGE_RECOMMENDATION_MISMATCH")
+        if adoption.get("validation_id") != validation.get("validation_id") or adoption.get(
+            "validation_hash"
+        ) != validation.get("validation_hash"):
+            raise ValueError("ADOPTION_LINEAGE_VALIDATION_MISMATCH")
 
 
 def canonical_rollback_identity(payload: dict[str, Any]) -> tuple[str, str]:
@@ -1092,6 +1173,13 @@ def validate_learning_policy_rollback(rollback: dict[str, Any]) -> None:
     expected_hash, expected_id = canonical_rollback_identity(rollback)
     if stored_hash != expected_hash or stored_id != expected_id:
         raise ValueError("ROLLBACK_CONTENT_ADDRESS_MISMATCH")
+    if rollback.get("rollback_status") != "ROLLED_BACK":
+        raise ValueError("ROLLBACK_STATUS_INVALID")
+    rolled_back = rollback.get("rolled_back_policy")
+    if not isinstance(rolled_back, dict) or rollback.get("rolled_back_policy_hash") != _policy_hash(
+        rolled_back
+    ):
+        raise ValueError("ROLLBACK_POLICY_HASH_MISMATCH")
 
 
 def project_adoption_into_planner_budget(
@@ -1101,12 +1189,25 @@ def project_adoption_into_planner_budget(
     target_model: str = "qwen2.5-coder:7b",
     runtime_identity: str = "local_model_executor",
     rollback: dict[str, Any] | None = None,
+    recommendation: Mapping[str, Any] | None = None,
+    validation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Pure, deterministic projection of an adoption artifact into CapabilityPlanner budget."""
-    validate_learning_policy_adoption(adoption)
+    """Pure, deterministic projection of an adoption artifact into CapabilityPlanner budget.
+
+    ``recommendation``/``validation`` are optional lineage artifacts passed through
+    to ``validate_learning_policy_adoption``; without them only self-consistency is
+    verified (Issue #85).
+    """
+    validate_learning_policy_adoption(adoption, recommendation=recommendation, validation=validation)
     if rollback is not None:
         validate_learning_policy_rollback(rollback)
-        if rollback.get("adoption_id") != adoption.get("adoption_id"):
+        if (
+            rollback.get("adoption_id") != adoption.get("adoption_id")
+            or rollback.get("adoption_hash") != adoption.get("adoption_hash")
+            or rollback.get("recommendation_id") != adoption.get("recommendation_id")
+            or rollback.get("recommendation_hash") != adoption.get("recommendation_hash")
+            or rollback.get("previous_policy_hash") != adoption.get("target_policy_hash")
+        ):
             raise ValueError("PROJECTION_ROLLBACK_ADOPTION_MISMATCH")
         # Rollback active: return clean inactive budget
         return {

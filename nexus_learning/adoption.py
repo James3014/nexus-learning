@@ -580,13 +580,23 @@ class AdoptionStore:
         return self._write(self._state_root.rollback_path, payload)
 
     def read_adoption(self) -> dict[str, Any] | None:
-        adoption = self._read(self._state_root.adoption_path)
+        path = self._state_root.adoption_path
+        adoption = self._read(path)
+        if adoption is None and path.exists():
+            raise ValueError("ADOPTION_NOT_A_MAPPING")
         if adoption is not None:
             validate_learning_policy_adoption(adoption)
         return adoption
 
     def read_rollback(self) -> dict[str, Any] | None:
-        return self._read(self._state_root.rollback_path)
+        path = self._state_root.rollback_path
+        rollback = self._read(path)
+        if rollback is None and path.exists():
+            # A present but non-mapping rollback must not read as "no rollback".
+            raise ValueError("ROLLBACK_NOT_A_MAPPING")
+        if rollback is not None:
+            validate_learning_policy_rollback(rollback)
+        return rollback
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any] | None:
