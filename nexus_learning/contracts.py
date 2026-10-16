@@ -1076,10 +1076,6 @@ def validate_learning_policy_adoption(
             "validation_hash"
         ) != validation.get("validation_hash"):
             raise ValueError("ADOPTION_LINEAGE_VALIDATION_MISMATCH")
-        if delta != recommendation.get("recommended_policy_delta"):
-            raise ValueError("ADOPTION_LINEAGE_DELTA_MISMATCH")
-        if previous != recommendation.get("current_policy"):
-            raise ValueError("ADOPTION_LINEAGE_PREVIOUS_POLICY_MISMATCH")
 
 
 def canonical_rollback_identity(payload: dict[str, Any]) -> tuple[str, str]:

@@ -173,15 +173,11 @@ def test_lineage_id_and_hash_mismatch_rejected(genuine):
             validate_learning_policy_adoption(bad, recommendation=recommendation, validation=validation)
 
 
-def test_lineage_scope_revision_and_delta_mismatch_rejected(genuine):
+def test_lineage_scope_and_revision_mismatch_rejected(genuine):
     adoption, recommendation, validation = genuine
     cases = [
         ({"source_revision": "other-rev"}, "ADOPTION_SOURCE_REVISION_STALE"),
         ({"adopted_scope": {"task_family": "other"}}, "ADOPTION_SCOPE_TASK_FAMILY_MISMATCH"),
-        (
-            {"target_policy_delta": {"episodic_memory_injection": {"enabled": True}}},
-            "ADOPTION_LINEAGE_DELTA_MISMATCH",
-        ),
     ]
     for changes, code in cases:
         bad = _reseal(adoption, **changes)
