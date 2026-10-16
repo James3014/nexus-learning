@@ -140,7 +140,7 @@ def test_forged_adoption_rejected_when_lineage_supplied(genuine):
     fake = forged()
     with pytest.raises(ValueError, match="ADOPTION_SOURCE_REVISION_STALE"):
         validate_learning_policy_adoption(fake, recommendation=recommendation, validation=validation)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="ADOPTION_SOURCE_REVISION_STALE"):
         project(fake, recommendation=recommendation, validation=validation)
 
 
@@ -197,7 +197,7 @@ def test_tampered_or_rejected_validation_rejected(genuine):
         validate_learning_policy_adoption(adoption, recommendation=recommendation, validation=bad_val)
     bad_rec = copy.deepcopy(recommendation)
     bad_rec["observed_effect"] = "forged"
-    with pytest.raises(ValueError, match="RECOMMENDATION_"):
+    with pytest.raises(ValueError, match="RECOMMENDATION_CONTENT_ADDRESS_MISMATCH"):
         validate_learning_policy_adoption(adoption, recommendation=bad_rec, validation=validation)
 
 
@@ -276,3 +276,33 @@ def test_non_mapping_rollback_file_is_not_treated_as_absent(tmp_path):
     path.write_text("[]")
     with pytest.raises(ValueError, match="ROLLBACK_NOT_A_MAPPING"):
         store.read_rollback()
+
+
+# --- Gemini cross-model review (PR #108) --------------------------------------
+
+
+@pytest.mark.parametrize("validation", ["bad", [1, 2], 3])
+def test_non_mapping_validation_lineage_rejected_with_value_error(genuine, validation):
+    adoption, recommendation, _ = genuine
+    with pytest.raises(ValueError, match="ADOPTION_VALIDATION_SCHEMA_INVALID"):
+        validate_learning_policy_adoption(adoption, recommendation=recommendation, validation=validation)
+
+
+@pytest.mark.parametrize("scope", ["local_heal", ["task_family"], 1])
+def test_non_mapping_adopted_scope_rejected(tmp_path, scope):
+    assert_rejected_everywhere(forged(adopted_scope=scope), tmp_path, "ADOPTION_SCOPE_OVERBROAD")
+
+
+@pytest.mark.parametrize("target", ["shadow", {"notes": "no target"}, {"target_state": {}}, ["x"]])
+def test_unrollbackable_adoption_rejected(tmp_path, target):
+    adoption = forged(rollback_target=target)
+    assert_rejected_everywhere(adoption, tmp_path, "ADOPTION_MISSING_ROLLBACK_TARGET")
+
+
+def test_non_mapping_adoption_file_is_not_treated_as_absent(tmp_path):
+    store = AdoptionStore(LearningStateRoot(tmp_path))
+    path = store._state_root.adoption_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[]")
+    with pytest.raises(ValueError, match="ADOPTION_NOT_A_MAPPING"):
+        store.read_adoption()

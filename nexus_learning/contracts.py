@@ -825,6 +825,8 @@ def _verify_adoption_lineage(
 ) -> tuple[Any, Any]:
     """Shared producer/consumer lineage checks; returns (recommendation_id, hash)."""
     validate_learning_policy_recommendation(recommendation)  # type: ignore[arg-type]
+    if not isinstance(validation, Mapping):
+        raise ValueError("ADOPTION_VALIDATION_SCHEMA_INVALID")
     if validation.get("schema") != LEARNING_POLICY_VALIDATION_SCHEMA:
         raise ValueError("ADOPTION_VALIDATION_SCHEMA_INVALID")
     if validation.get("validation_disposition") != "VALIDATED_FOR_ADOPTION_CONSIDERATION":
@@ -1059,6 +1061,8 @@ def validate_learning_policy_adoption(
 
     # Scope check
     scope = adoption.get("adopted_scope", {})
+    if not isinstance(scope, dict):
+        raise ValueError("ADOPTION_SCOPE_OVERBROAD")
     if (
         not scope
         or scope.get("all_tasks")
@@ -1067,15 +1071,16 @@ def validate_learning_policy_adoption(
     ):
         raise ValueError("ADOPTION_SCOPE_OVERBROAD")
 
-    # Rollback check
-    if not adoption.get("rollback_target"):
+    # Rollback check: same rule as the producer (a dict with a target_state).
+    rollback_target = adoption.get("rollback_target")
+    if not isinstance(rollback_target, dict) or not rollback_target.get("target_state"):
         raise ValueError("ADOPTION_MISSING_ROLLBACK_TARGET")
 
     if recommendation is not None and validation is not None:
         rec_id, rec_hash = _verify_adoption_lineage(
             recommendation,
             validation,
-            adopted_scope=scope if isinstance(scope, dict) else {},
+            adopted_scope=scope,
             source_revision=str(adoption.get("source_revision") or ""),
         )
         if (
