@@ -49,7 +49,8 @@ _EMBEDDING_MIN = 8
 _EMBEDDING_MAX = 4096
 _EMBEDDING_TEXT_MAX = 4000
 _PATCH_EXCERPT_MAX = 1500
-_FIX_RECIPE_HEADER = "\n\nFix recipe:\n"
+_FIX_RECIPE_HEADER = "\n\nFix recipe:\n"  # legacy: older lessons appended the recipe to the body
+_FIX_RECIPE_MAX = 2000
 _SEMANTIC_FLOOR = 0.3
 _SEMANTIC_WEIGHT = 0.6
 _KEYWORD_WEIGHT = 0.4
@@ -247,10 +248,12 @@ def build_lesson(
     evidence_origin: str = EVIDENCE_ORIGIN_SIMULATED,
     tags: Iterable[str] = (),
     embedding: Sequence[float] | None = None,
+    fix_recipe: str = "",
 ) -> dict[str, Any]:
     """Normalize lesson content into the canonical v1 shape and validate it.
 
-    The embedding is advisory retrieval metadata and is not part of the lesson id.
+    The embedding and fix_recipe are advisory metadata and not part of the lesson id. fix_recipe is
+    for human audit only: it is stored only when non-empty and never exposed by retrieval.
     """
     clean_title = _text(title)[:_TITLE_MAX].strip()
     clean_body = _text(lesson_body)[:_BODY_MAX].strip()
@@ -293,6 +296,9 @@ def build_lesson(
         "tags": _unique_sorted(tags),
         "embedding": _embedding_or_none(embedding),
     }
+    recipe = neutralize_untrusted_text(_text(fix_recipe)).strip()[:_FIX_RECIPE_MAX].rstrip()
+    if recipe:
+        lesson["fix_recipe"] = recipe
     validate_lesson(lesson)
     return lesson
 
@@ -312,6 +318,9 @@ def validate_lesson(lesson: Mapping[str, Any]) -> None:
         items = lesson.get(key) or []
         if len(items) > _LIST_MAX or any(len(_text(item)) > _ITEM_MAX for item in items):
             raise ValueError("LESSON_CONTENT_TOO_LONG")
+    recipe = lesson.get("fix_recipe")
+    if recipe is not None and (not isinstance(recipe, str) or len(recipe) > _FIX_RECIPE_MAX):
+        raise ValueError("LESSON_CONTENT_TOO_LONG")
     sources = lesson.get("source_episode_ids")
     if not isinstance(sources, (list, tuple)) or not _unique_sorted(sources):
         raise ValueError("LESSON_PROVENANCE_REQUIRED")
@@ -347,11 +356,28 @@ def validate_lesson(lesson: Mapping[str, Any]) -> None:
     _embedding_or_none(embedding)
 
 
+def abstract_lesson_body(lesson: Mapping[str, Any]) -> str:
+    """Lesson body without any legacy appended "Fix recipe:" section (safe to inject)."""
+    return _text(lesson.get("lesson_body")).split(_FIX_RECIPE_HEADER, 1)[0].strip()
+
+
+def injection_text_for_lesson(lesson: Mapping[str, Any]) -> str:
+    """Text a consumer may show a retrying model: title, abstract lesson, applies/avoid. No recipe."""
+    parts = [_text(lesson.get("title")), abstract_lesson_body(lesson)]
+    applies = [_text(item) for item in lesson.get("applies_when") or []]
+    avoid = [_text(item) for item in lesson.get("avoid_when") or []]
+    if applies:
+        parts.append("Applies when: " + "; ".join(applies))
+    if avoid:
+        parts.append("Avoid when: " + "; ".join(avoid))
+    return "\n".join(part for part in parts if part)
+
+
 def embedding_text_for_lesson(lesson: Mapping[str, Any]) -> str:
     """Text embedded for a lesson: title, body, applies_when and tags, bounded."""
     text = "\n".join([
         _text(lesson.get("title")),
-        _text(lesson.get("lesson_body")),
+        abstract_lesson_body(lesson),
         "; ".join(_text(item) for item in lesson.get("applies_when") or []),
         "; ".join(_text(item) for item in lesson.get("tags") or []),
     ])
@@ -474,7 +500,7 @@ def retrieve_lessons(
         body_stems = _stems(
             " ".join([
                 _text(lesson.get("title")),
-                _text(lesson.get("lesson_body")),
+                abstract_lesson_body(lesson),
                 " ".join(_text(item) for item in lesson.get("applies_when") or []),
                 " ".join(_text(item) for item in lesson.get("avoid_when") or []),
             ])
@@ -507,7 +533,8 @@ def retrieve_lessons(
         polarity = _text(lesson.get("outcome_polarity"))
         rows.append({
             "lesson_id": _text(lesson.get("lesson_id")),
-            "summary": _text(lesson.get("lesson_body")),
+            "summary": abstract_lesson_body(lesson),
+            "injection_text": injection_text_for_lesson(lesson),
             "title": _text(lesson.get("title")),
             "classification": polarity,
             "pattern_type": polarity,
@@ -565,8 +592,11 @@ def build_reflection_prompt(episodes: Sequence[Mapping[str, Any]], polarity: str
         "Write ONE reusable lesson as JSON with keys title, lesson, applies_when (list), "
         "avoid_when (list), keywords (list), confidence (0-1), fix_recipe (string). keywords: 5-10 short lowercase "
         "terms naming the pitfall, the symptom and the fix (e.g. rounding, half-even, decimal, total, split). "
-        "fix_recipe: a concrete, minimal code-level recipe (<= 12 lines) that another engineer could apply "
-        "to a similar bug; empty string if none. "
+        "lesson: a transferable, procedure-level insight for a different but similar task: what to check, "
+        "what to verify, and which invariant was violated or held. State it as a procedure; "
+        "no code, no file-specific patch, no function or variable names from this repository. "
+        "fix_recipe: optional (empty string if none); a concrete recipe (<= 12 lines) kept for human audit only, "
+        "never shown to the retrying model. "
         "For failures, state what to avoid and why. "
         "Output JSON only."
     )
@@ -671,7 +701,7 @@ def neutralize_untrusted_text(text: str) -> str:
 
 
 def _append_fix_recipe(body: str, recipe: str) -> str:
-    """Append the recipe under a header, trimming only the recipe to fit the body cap."""
+    """Legacy helper (pre-#96 body format); no longer used by reflection. Append the recipe under a header, trimming only the recipe to fit the body cap."""
     clean = neutralize_untrusted_text(recipe).strip()
     base = body.strip()
     room = _BODY_MAX - len(base) - len(_FIX_RECIPE_HEADER)
@@ -719,7 +749,6 @@ def _judge_lesson(
         fix_recipe = ""
     if not isinstance(fix_recipe, str):
         return None
-    body = _append_fix_recipe(body, fix_recipe)
     confidence = payload.get("confidence")
     if confidence is None:
         confidence = _DEFAULT_CONFIDENCE
@@ -733,6 +762,7 @@ def _judge_lesson(
             avoid_when=avoid,
             confidence=float(confidence),
             tags=_normalize_tags(keywords),
+            fix_recipe=fix_recipe,
             reflector={
                 "kind": REFLECTOR_KIND_JUDGE,
                 "model": model_name,
@@ -891,4 +921,9 @@ def _attach_embedding(
     reflector = dict(lesson["reflector"])
     reflector["embed_model"] = embed_model
     fields = {name: lesson[name] for name in _LESSON_FIELDS}
-    return build_lesson(**fields, reflector=reflector, embedding=vector)
+    return build_lesson(
+        **fields,
+        fix_recipe=_text(lesson.get("fix_recipe")),
+        reflector=reflector,
+        embedding=vector,
+    )

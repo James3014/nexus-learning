@@ -68,6 +68,8 @@ on arm 有 13 次成功歸因到 lesson，但歸因的題目整體並沒有比�
 
 1. **lesson 改回抽象、程序性的洞見，關掉具體 fix recipe 注入。** 研究與第 9 組結果都指向具體修法會帶偏模型。
    保留 recipe 欄位供人看，但不注入重試 prompt。
+   （#96 已在程式端實作，待量測：recipe 改存獨立 `fix_recipe` 欄位；檢索 row 只含 title、抽象 lesson、applies_when/avoid_when，
+   並提供 `injection_text`；reflection prompt 改要求程序層級的洞見。尚未用校正題組、≥3 次重跑驗證 uplift。）
 2. **嚴格篩選加入與刪除。** 只把「被歸因且最終成功」的 lesson 留在可檢索集合；被歸因卻失敗的 lesson 降權或淘汰
    （nexus-learning 已有 `lesson_disposition` 的 reinforce / contradict / retire，可接上）。
 3. **檢索閘門。** 只在 off-path 第一次失敗後、且語意相似度高於門檻時才注入；注入前檢查 `avoid_when` 與目前題目的前置條件。
