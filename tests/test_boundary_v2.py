@@ -36,6 +36,8 @@ CORE = {
     "lessons",
     "adoption",
     "_atomic_io",  # shared atomic-write helper used by the stages above, not a stage itself
+    "_textutil",  # shared text helper (#78), not a stage itself
+    "_statuses",  # shared verifier status vocabulary (#78), not a stage itself
 }
 
 _DOC_BULLET = re.compile(r"^- `nexus_learning\.([a-z_]+)`$")

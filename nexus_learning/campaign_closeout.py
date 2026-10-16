@@ -51,6 +51,11 @@ MATERIAL_DELTA = "MATERIAL_DELTA"
 OWNER_DECISION = "OWNER_DECISION"
 
 
+# Hash format note (identity values; do NOT change without a migration):
+# this helper returns "sha256:" + hex over json.dumps(sort_keys, compact
+# separators, ensure_ascii=False). experiment_integrity._hash returns BARE hex
+# over ensure_ascii=True (the default) JSON. The two are different identity
+# formats and are pinned by tests/test_hash_format_compat.py.
 def _hash(value: Any) -> str:
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
