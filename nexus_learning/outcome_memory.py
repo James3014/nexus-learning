@@ -168,7 +168,32 @@ class EpisodeOutcomeRecord:
             and not bool(trust_mismatch)
             and inferred_evidence
         )
-        stable_identity = str(idempotency_key or f"{task_id}:{attempt_id}:{action_id}")
+        attempt = str(attempt_id or "")
+        action = str(action_id or "")
+        resolved_created_at = created_at or datetime.now(timezone.utc).isoformat()
+        if idempotency_key:
+            stable_identity = str(idempotency_key)
+        elif attempt or action:
+            stable_identity = f"{task_id}:{attempt}:{action}"
+        else:
+            # No caller identity: tell outcomes apart by what they record (incl. when), so
+            # later outcomes of the same task are kept, while rebuilding the same outcome
+            # for a retry still deduplicates (#114).
+            fingerprint = _stable_hash(
+                json.dumps(
+                    {
+                        "created_at": resolved_created_at,
+                        "solved": bool(solved),
+                        "terminal_outcome": normalized_terminal,
+                        "wall_duration_sec": wall_duration_sec,
+                        "total_tokens_used": total_tokens_used,
+                        "receipts": normalized_receipts,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+            )
+            stable_identity = f"{task_id}::outcome:{fingerprint}"
         episode_id = "lep:" + hashlib.sha256(stable_identity.encode("utf-8")).hexdigest()[:24]
         stage_map = dict(stages or {})
         stage_map.setdefault("recorded", True)
@@ -188,9 +213,9 @@ class EpisodeOutcomeRecord:
             trust_mismatch=bool(trust_mismatch),
             receipts=normalized_receipts,
             ab_lift_value=float(ab_lift_value or 0.0),
-            created_at=created_at or datetime.now(timezone.utc).isoformat(),
-            attempt_id=str(attempt_id or ""),
-            action_id=str(action_id or ""),
+            created_at=resolved_created_at,
+            attempt_id=attempt,
+            action_id=action,
             idempotency_key=stable_identity,
             terminal_outcome=normalized_terminal,
             auto_replay_allowed=bool(auto_replay_allowed) and qualified,
