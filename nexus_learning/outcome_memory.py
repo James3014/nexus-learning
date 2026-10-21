@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import threading
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -171,12 +170,30 @@ class EpisodeOutcomeRecord:
         )
         attempt = str(attempt_id or "")
         action = str(action_id or "")
+        resolved_created_at = created_at or datetime.now(timezone.utc).isoformat()
         if idempotency_key:
             stable_identity = str(idempotency_key)
         elif attempt or action:
             stable_identity = f"{task_id}:{attempt}:{action}"
         else:
-            stable_identity = f"{task_id}::{uuid.uuid4().hex}"
+            # No caller identity: tell outcomes apart by what they record (incl. when), so
+            # later outcomes of the same task are kept, while rebuilding the same outcome
+            # for a retry still deduplicates (#114).
+            fingerprint = _stable_hash(
+                json.dumps(
+                    {
+                        "created_at": resolved_created_at,
+                        "solved": bool(solved),
+                        "terminal_outcome": normalized_terminal,
+                        "wall_duration_sec": wall_duration_sec,
+                        "total_tokens_used": total_tokens_used,
+                        "receipts": normalized_receipts,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+            )
+            stable_identity = f"{task_id}::outcome:{fingerprint}"
         episode_id = "lep:" + hashlib.sha256(stable_identity.encode("utf-8")).hexdigest()[:24]
         stage_map = dict(stages or {})
         stage_map.setdefault("recorded", True)
@@ -196,7 +213,7 @@ class EpisodeOutcomeRecord:
             trust_mismatch=bool(trust_mismatch),
             receipts=normalized_receipts,
             ab_lift_value=float(ab_lift_value or 0.0),
-            created_at=created_at or datetime.now(timezone.utc).isoformat(),
+            created_at=resolved_created_at,
             attempt_id=attempt,
             action_id=action,
             idempotency_key=stable_identity,
