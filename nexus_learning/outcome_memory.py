@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import threading
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -168,7 +169,14 @@ class EpisodeOutcomeRecord:
             and not bool(trust_mismatch)
             and inferred_evidence
         )
-        stable_identity = str(idempotency_key or f"{task_id}:{attempt_id}:{action_id}")
+        attempt = str(attempt_id or "")
+        action = str(action_id or "")
+        if idempotency_key:
+            stable_identity = str(idempotency_key)
+        elif attempt or action:
+            stable_identity = f"{task_id}:{attempt}:{action}"
+        else:
+            stable_identity = f"{task_id}::{uuid.uuid4().hex}"
         episode_id = "lep:" + hashlib.sha256(stable_identity.encode("utf-8")).hexdigest()[:24]
         stage_map = dict(stages or {})
         stage_map.setdefault("recorded", True)
@@ -189,8 +197,8 @@ class EpisodeOutcomeRecord:
             receipts=normalized_receipts,
             ab_lift_value=float(ab_lift_value or 0.0),
             created_at=created_at or datetime.now(timezone.utc).isoformat(),
-            attempt_id=str(attempt_id or ""),
-            action_id=str(action_id or ""),
+            attempt_id=attempt,
+            action_id=action,
             idempotency_key=stable_identity,
             terminal_outcome=normalized_terminal,
             auto_replay_allowed=bool(auto_replay_allowed) and qualified,
