@@ -85,3 +85,35 @@ def test_concurrent_unique_appends_remain_reader_visible(tmp_path: Path) -> None
     assert results == [True] * len(episodes)
     rows = load_learning_closures(path)
     assert {row["episode_id"] for row in rows} == {episode["episode_id"] for episode in episodes}
+
+
+def test_episode_with_unicode_line_separators_is_found(tmp_path):
+    from nexus_learning.closure_effectiveness import (
+        append_learning_episode,
+        learning_episode_exists,
+    )
+
+    for n, sep in enumerate(["\u2028", "\u2029", "\x85", "\x1c", "\x1d", "\x1e", "\x0b", "\x0c"]):
+        path = tmp_path / f"episodes-{n}.jsonl"
+        assert append_learning_episode(path, {"episode_id": "ep1", "note": f"a{sep}b"})
+        assert learning_episode_exists(path, "ep1") is True
+
+
+def test_episode_lookup_still_exact_and_skips_bad_lines(tmp_path):
+    import json
+
+    from nexus_learning.closure_effectiveness import learning_episode_exists
+
+    path = tmp_path / "episodes.jsonl"
+    rows = [
+        json.dumps({"episode_id": "ep10", "note": "mentions ep2 and episode_id ep3"}),
+        "{not json",
+        json.dumps({"episode_id": "ep1", "note": "x\u2028y"}, ensure_ascii=False),
+        json.dumps(["episode_id", "ep4"]),
+    ]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert learning_episode_exists(path, "ep1") is True
+    assert learning_episode_exists(path, "ep10") is True
+    for missing in ["ep2", "ep3", "ep4", "ep", "1"]:
+        assert learning_episode_exists(path, missing) is False
+    assert learning_episode_exists(tmp_path / "absent.jsonl", "ep1") is False
