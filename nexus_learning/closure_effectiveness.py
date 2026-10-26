@@ -139,7 +139,7 @@ def _validate_unterminated_tail(path: Path) -> bool | None:
 def learning_episode_exists(path: Path, episode_id: str) -> bool:
     if not path.exists() or not episode_id:
         return False
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").split("\n"):
         try:
             row = json.loads(line)
             if isinstance(row, dict) and str(row.get("episode_id", "")) == episode_id:
